@@ -1,0 +1,2392 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Condor Productivity (Offline)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"
+  onerror="var s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js'; document.head.appendChild(s);"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        screens: { md: '820px' },
+        fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+        colors: {
+          brand: {
+            50:'#eff6ff', 100:'#dbeafe', 200:'#bfdbfe', 300:'#93c5fd', 400:'#60a5fa',
+            500:'#3b82f6', 600:'#2563eb', 700:'#1d4ed8', 800:'#1e40af', 900:'#1e3a8a'
+          },
+          ink: { 900:'#0B0F19' }
+        }
+      }
+    }
+  };
+</script>
+<style type="text/tailwindcss">
+  @layer base {
+    html, body { @apply h-full; }
+    body { @apply bg-[#F8FAFC] text-slate-800 font-sans antialiased m-0 p-0; }
+    button, input, select { font-family: inherit; }
+    button { @apply cursor-pointer; }
+    /* Kept only because a couple of inline style="" strings in the (otherwise untouched) original
+       script still reference these two var() names directly for non-visual-critical fallback text. */
+    :root { --ink: #1e293b; --line: #cbd5e1; }
+  }
+
+  @layer components {
+    /* ================= APP SHELL — Dark Sidebar + Light Canvas ================= */
+    #app { @apply min-h-screen flex flex-col; }
+    .app-shell { @apply flex-1 flex flex-col md:flex-row; }
+
+    /* ---- Sidebar (desktop only) ---- */
+    .sidebar { @apply hidden md:flex md:flex-col md:w-64 md:flex-none md:h-screen md:sticky md:top-0 bg-slate-900 text-slate-300; }
+    .sidebar-brand { @apply flex items-center gap-3 px-5 py-5 border-b border-white/10; }
+    .sidebar-brand .logo { @apply w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-extrabold text-sm flex-none shadow-lg shadow-brand-600/30; }
+    .brand-titles { @apply min-w-0; }
+    .brand-sub { @apply text-[10px] tracking-[0.15em] text-slate-500 uppercase font-bold; }
+    .brand-title { @apply text-white font-bold text-[13.5px] truncate; }
+    .version-badge { @apply text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded ml-1 font-medium align-middle; }
+
+    .sidebar-nav { @apply flex-1 px-3 py-4 flex flex-col gap-1 overflow-y-auto; }
+    .sidenav-item { @apply flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13.5px] font-semibold text-slate-400 hover:bg-white/5 hover:text-white transition-colors w-full text-left; }
+    .sidenav-item.active { @apply bg-brand-600 text-white shadow-md shadow-brand-600/30 hover:bg-brand-600 hover:text-white; }
+    .sidenav-icon { @apply w-[18px] h-[18px] flex-none; }
+    .sidenav-icon svg { @apply w-full h-full; }
+
+    .sidebar-profile { @apply flex items-center gap-2.5 px-4 py-4 border-t border-white/10; }
+    .profile-info { @apply flex-1 min-w-0 leading-tight; }
+    .profile-info b { @apply block text-white text-[13px] font-semibold truncate; }
+    .profile-info span { @apply block text-[11px] text-slate-500 truncate mt-0.5; }
+    .profile-logout { @apply flex-none w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-white/10 hover:text-white transition-colors; }
+    .profile-logout svg { @apply w-[17px] h-[17px]; }
+
+    /* ---- Mobile top bar (mobile only — desktop uses the sidebar instead) ---- */
+    .content-area { @apply flex-1 min-w-0 flex flex-col; }
+    .mobile-topbar { @apply flex md:hidden items-center gap-3 bg-slate-900 px-5 py-3.5 sticky top-0 z-20; }
+    .mobile-topbar .logo { @apply flex-none w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-extrabold text-[13px]; }
+    .mobile-topbar .titles { @apply flex-1 min-w-0; }
+    .mobile-topbar .line1 { @apply text-[10px] tracking-wider text-slate-500 uppercase font-medium; }
+    .mobile-topbar h1 { @apply text-[15px] font-bold text-white truncate m-0 mt-0.5; }
+    .mobile-topbar .userbox { @apply text-[11px] text-right text-slate-500 flex-none; }
+    .mobile-topbar .userbox b { @apply block text-white text-[12.5px] font-semibold; }
+    .mobile-topbar .logoutBtn { @apply ml-1.5 flex-none rounded-lg border border-white/10 text-slate-300 text-[11px] px-2.5 py-1.5 hover:bg-white/10 hover:text-white transition-colors; }
+
+    /* ---- Content header (page title + status pill) ---- */
+    .content-header { @apply flex items-center justify-between gap-3 px-5 pt-5 pb-4 md:px-8 md:pt-8 md:pb-6; }
+    .page-title { @apply text-xl md:text-[26px] font-extrabold text-slate-900 m-0 tracking-tight; }
+    .offline-pill { @apply inline-flex items-center gap-1.5 text-[12px] font-bold text-emerald-700 bg-emerald-100 px-3 py-[7px] rounded-full flex-none; }
+
+    main { @apply flex-1 w-full max-w-[1400px] mx-auto px-5 pb-24 md:px-8 md:pb-10; }
+
+    /* ---- Bottom tab bar (mobile only) ---- */
+    .bottomtabs { @apply flex md:hidden sticky bottom-0 z-20 bg-white border-t border-slate-200; box-shadow: 0 -2px 10px rgba(0,0,0,0.04); }
+    .bottomtabs button { @apply flex-1 flex flex-col items-center gap-1 py-2.5 text-[11px] font-semibold text-slate-500 min-h-[56px]; }
+    .bottomtabs button .ic { @apply w-5 h-5; }
+    .bottomtabs button.active { @apply text-brand-600; }
+
+    /* ================= Cards & sections ================= */
+    .card { @apply bg-white border border-slate-100 rounded-xl shadow-sm p-5 mb-4; }
+    .section-title { @apply text-[12px] font-bold uppercase tracking-wider text-slate-500 mb-3; }
+
+    /* ================= Forms ================= */
+    label { @apply block text-[13px] font-semibold text-slate-500 mb-1.5; }
+    .req { @apply text-rose-500; }
+    input[type=text], input[type=password], input[type=number], input[type=date], input[type=time], input[type=month], select, textarea {
+      @apply w-full px-3.5 py-3 border border-slate-300 rounded-xl text-[15px] text-slate-800 bg-white min-h-[48px] transition-colors;
+    }
+    input:focus, select:focus, textarea:focus { @apply outline-none ring-2 ring-brand-500 border-brand-500; }
+    .field { @apply mb-4; }
+    .field .err { @apply text-rose-500 text-[12.5px] mt-1.5 font-semibold; }
+    .field.has-err input, .field.has-err select { @apply border-rose-400; }
+    .row2 { @apply grid grid-cols-2 gap-2.5; }
+
+    .btnlist { @apply flex flex-wrap gap-2; }
+    .btnlist button { @apply min-h-[48px] px-4 py-2.5 border border-slate-300 rounded-xl bg-white font-semibold text-sm text-slate-600 hover:border-brand-300 transition-colors; }
+    .btnlist button.active { @apply bg-brand-600 border-brand-600 text-white shadow-sm hover:border-brand-600; }
+    .btnlist.grow button { @apply flex-1 min-w-[110px]; }
+
+    .btn { @apply inline-flex items-center justify-center gap-1.5 min-h-[48px] px-5 rounded-xl font-bold text-[14.5px] transition-colors; }
+    .btn-primary { @apply bg-brand-600 text-white w-full hover:bg-brand-700 shadow-sm; }
+    .btn-primary:disabled { @apply bg-slate-300 cursor-not-allowed hover:bg-slate-300; }
+    .btn-outline { @apply bg-white border border-slate-300 text-slate-700 hover:bg-slate-50; }
+    .btn-danger { @apply bg-rose-600 text-white hover:bg-rose-700; }
+    .btn-sm { @apply min-h-[36px] px-3 text-[13px] rounded-lg; }
+
+    .hint { @apply text-xs text-slate-400 mt-1.5 leading-relaxed; }
+    .readout { @apply bg-slate-50 rounded-xl px-3.5 py-2.5 text-[13.5px] text-slate-600 border border-slate-200; }
+
+    /* ================= Status pills ================= */
+    .pill { @apply inline-block px-3 py-1 rounded-full font-bold text-[12px]; }
+    .pill.go { @apply bg-emerald-100 text-emerald-700; }
+    .pill.amber { @apply bg-amber-100 text-amber-700; }
+    .pill.warn { @apply bg-rose-100 text-rose-700; }
+    .pill.na { @apply bg-slate-100 text-slate-500; }
+
+    /* ================= KPI cards ================= */
+    .kpis { @apply grid grid-cols-2 md:grid-cols-4 gap-4 mb-5; }
+    .kpi { @apply bg-white border border-slate-100 rounded-xl shadow-sm px-4 py-4; }
+    .kpi .l { @apply text-[11.5px] font-semibold text-slate-400 uppercase tracking-wide; }
+    .kpi .v { @apply text-[24px] font-extrabold text-slate-900 mt-0.5; }
+    .kpi-icon-row { @apply flex items-center gap-3.5; }
+    .kpi-icon-box { @apply w-11 h-11 rounded-xl flex items-center justify-center flex-none; }
+    .kpi-icon-box svg { @apply w-5 h-5; }
+    .kpi-icon-box.blue { @apply bg-blue-50 text-blue-600; }
+    .kpi-icon-box.emerald { @apply bg-emerald-50 text-emerald-600; }
+    .kpi-icon-box.amber { @apply bg-amber-50 text-amber-600; }
+    /* Thanh progress bar 2 mau (Truc tiep/Gian tiep) trong the KPI — reusable cho bat ky ty le 2 phan nao khac neu can. */
+    .split-bar { @apply flex w-full h-2 rounded-full overflow-hidden bg-slate-100 mt-2; }
+    .split-bar .seg-a { @apply bg-emerald-500 h-full; }
+    .split-bar .seg-b { @apply bg-amber-400 h-full; }
+    .split-bar-legend { @apply flex justify-between text-[11px] font-semibold mt-1.5; }
+    .split-bar-legend .a { @apply text-emerald-600; }
+    .split-bar-legend .b { @apply text-amber-600; }
+    .kpi-icon-box.violet { @apply bg-violet-50 text-violet-600; }
+
+    /* ================= Tables ================= */
+    .tablewrap { @apply overflow-x-auto -mx-1 px-1; }
+    table { @apply w-full border-collapse text-[13px]; }
+    th, td { @apply px-4 py-3.5 border-b border-slate-100 text-left whitespace-nowrap; }
+    th { @apply text-[11px] uppercase tracking-wider text-slate-400 font-bold cursor-pointer select-none bg-slate-50 sticky top-0 z-10; }
+    th.sorted { @apply text-brand-600; }
+    tbody tr { @apply transition-colors; }
+    tbody tr:hover td { @apply bg-slate-50; }
+    tbody tr.row-warn td { @apply bg-amber-50; }
+    tbody tr.row-warn:hover td { @apply bg-amber-100; }
+    .empty { @apply py-9 px-3 text-center text-slate-400 text-sm flex flex-col items-center gap-3; }
+    .empty::before {
+      content: '';
+      @apply w-12 h-12 opacity-40;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='1.5'%3E%3Crect x='3' y='7' width='18' height='13' rx='2'/%3E%3Cpath d='M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'/%3E%3Cpath d='M3 13h18'/%3E%3C/svg%3E");
+      background-size: contain; background-repeat: no-repeat; background-position: center;
+    }
+
+    .toolbar { @apply flex flex-wrap gap-2 items-center mb-3; }
+    .toolbar input, .toolbar select { @apply w-auto min-h-[40px] px-3 py-2 text-[13.5px]; }
+    .search-wrap { @apply relative; }
+    .search-wrap input { @apply pl-9; }
+    .search-icon { @apply absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none; }
+
+    /* ================= Toast ================= */
+    .toast {
+      @apply fixed bottom-20 right-6 md:bottom-6 bg-slate-900 text-white text-sm font-medium px-4 py-3 rounded-lg shadow-xl border border-slate-800 flex items-center gap-3 opacity-0 pointer-events-none translate-y-2 z-[80];
+      transition: opacity .2s, transform .2s;
+    }
+    .toast.show { @apply opacity-100 translate-y-0; }
+    .toast.err { @apply bg-rose-900 border-rose-700; }
+
+    /* ================= Modal ================= */
+    .modal-overlay { @apply fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-end md:items-center justify-center z-[60] p-0 md:p-4; }
+    .modal { @apply bg-white rounded-t-2xl md:rounded-2xl max-w-xl w-full max-h-[88vh] overflow-y-auto p-5 shadow-2xl; }
+    .modal h3 { @apply text-base font-bold mb-3 text-slate-800; }
+    .modal-actions { @apply flex gap-2.5 mt-4; }
+    .modal-actions .btn { @apply flex-1; }
+
+    /* ================= Bars ================= */
+    .bar { @apply h-3.5 rounded-full bg-brand-600; }
+    .barrow { @apply grid items-center gap-2.5 mb-2.5 text-[13px]; grid-template-columns: 110px 1fr 54px; }
+
+    .floating-bar { @apply fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-4 z-40 border border-slate-800; }
+    .floating-bar span { @apply text-sm font-medium text-slate-300; }
+    .btn-floating-approve { @apply bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors; }
+
+    /* ================= Login ================= */
+    .login-wrap { @apply flex-1 flex items-center justify-center p-5 bg-slate-900; }
+    .login-card { @apply max-w-sm w-full bg-white border border-slate-100 rounded-2xl shadow-2xl p-7; }
+    .login-card .logo { @apply w-12 h-12 rounded-2xl bg-brand-600 mx-auto mb-3.5 flex items-center justify-center text-white font-extrabold text-lg shadow-lg shadow-brand-600/30; }
+    .login-card h1 { @apply text-center text-lg font-bold m-0 mb-1 text-slate-800; }
+    .login-card .sub { @apply text-center text-slate-400 text-[12.5px] mb-5; }
+    .checkline { @apply flex items-center gap-2 text-[13.5px] text-slate-500 my-1 mb-4 font-medium; }
+    .checkline input { @apply w-auto min-h-0; }
+    .banner { @apply bg-amber-50 border border-amber-200 text-amber-700 text-[12.5px] px-3 py-2.5 rounded-xl mt-3.5 leading-relaxed; }
+
+    .tabstrip { @apply flex gap-1.5 overflow-x-auto mb-3.5 pb-0.5; }
+    .tabstrip button { @apply flex-none px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-[13px] font-semibold text-slate-500 min-h-[40px] hover:border-brand-300 transition-colors; }
+    .tabstrip button.active { @apply bg-brand-600 border-brand-600 text-white hover:border-brand-600; }
+  }
+</style>
+</head>
+
+<body>
+<div id="app"></div>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   CONDOR PRODUCTIVITY — OFFLINE PROTOTYPE
+   Data layer: localStorage (key CONDOR_DB_KEY). No network calls
+   except the SheetJS CDN script (only needed for Excel import) and
+   Google Fonts (best-effort; app works offline without it).
+   ============================================================ */
+
+const CONDOR_DB_KEY = 'condor_offline_db_v1';
+const CONDOR_SESSION_KEY = 'condor_offline_session_v1';
+const BREAKS = [[600,610],[720,780],[900,910],[1020,1035]]; // 10:00-10:10,12:00-13:00,15:00-15:10,17:00-17:15
+const OT_START = 1035; // 17:15
+
+/* ---------------- Seed data ---------------- */
+function seedDB(){
+  return {
+    employees:[
+      {maNV:'Admin', ten:'Admin', employeeTeam:'', role:'Admin', passwordHash:null, active:true},
+    ],
+    teams:[],
+    workingTeamPermissions:[],
+    /* Bảng gộp thay thế Sản phẩm + Process + Thời gian chuẩn + Việc gián tiếp.
+       1 dòng = {workType:'Direct'|'Indirect', workingTeam, maTP, tenTP, maNVL, tenNVL, congDoan, thoiGianChuan}.
+       Direct: maTP/tenTP bắt buộc; maNVL/tenNVL tuỳ chọn (để phân hoá TGC theo nguyên vật liệu, có thể để trống).
+       Indirect: maTP/tenTP/maNVL/tenNVL để trống, chỉ workingTeam+congDoan; thoiGianChuan=0.
+       Khoá xác định 1 dòng: workType + workingTeam + maTP + maNVL + congDoan.
+       KHÔNG còn lưu lịch sử theo ngày hiệu lực (bỏ effectiveFrom) — mỗi dòng chỉ có đúng 1 TGC hiện hành. */
+    workCatalog:[],
+    workRecords:[],
+    auditLogs:[],
+    _seedPasswordsPending:true, // set default password = MaNV for seed accounts on first boot
+  };
+}
+
+let DB = null;
+/* Thu tai du lieu khoi tao tu file data.json (chi thanh cong khi mo qua Local Server — VD `python -m http.server`
+   hoac VS Code Live Server — vi trinh duyet chan fetch() bang CORS khi mo truc tiep file:// ).
+   That bai vi BAT KY LY DO GI (khong co server, thieu file data.json, JSON loi cu phap, sai cau truc...)
+   deu tra ve null mot cach im lang — loadDB() se tu dong dung lai seedDB() nhu cu, dam bao file HTML
+   van mo truc tiep (double-click) hoat dong binh thuong, khong bat buoc phai co server. */
+async function loadSeedFromJSON(){
+  try {
+    const res = await fetch('data.json');
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (!json || !Array.isArray(json.employees) || !Array.isArray(json.teams)) return null; // sanity check cau truc toi thieu
+    return json;
+  } catch(err){
+    return null; // fetch bi CORS chan tren file://, khong tim thay file, loi mang... deu roi vao day
+  }
+}
+async function loadDB(){
+  const raw = localStorage.getItem(CONDOR_DB_KEY);
+  if (raw){ DB = JSON.parse(raw); }
+  else {
+    const seedFromFile = await loadSeedFromJSON();
+    DB = seedFromFile || seedDB();
+  }
+  // Tu phuc hoi neu trinh duyet con cache DB cu (truoc khi gop 4 bang thanh workCatalog) - tranh crash.
+  if (!Array.isArray(DB.workCatalog)) DB.workCatalog = [];
+  delete DB.products; delete DB.processes; delete DB.standardTimes; delete DB.indirectWorkTypes;
+}
+function saveDB(){ localStorage.setItem(CONDOR_DB_KEY, JSON.stringify(DB)); }
+
+async function ensureSeedPasswords(){
+  if (!DB._seedPasswordsPending) return;
+  for (const e of DB.employees){
+    if (!e.passwordHash) e.passwordHash = await sha256(e.maNV);
+  }
+  DB._seedPasswordsPending = false;
+  saveDB();
+}
+
+/* ---------------- Utils ---------------- */
+function uid(){ return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+async function sha256(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function minToHHMM(m){ const h=Math.floor(m/60)%24, mm=m%60; return String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0'); }
+function hhmmToMin(s){ const [h,m]=s.split(':').map(Number); return h*60+m; }
+function fmt1(n){ return Math.round(n*10)/10; }
+/* Hiển thị Thời gian chuẩn với đúng 3 số thập phân (VD: 0.07 -> "0.070") để không bị hiểu nhầm là 0. */
+function fmt3(n){ return Number(n||0).toFixed(3); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function computeTimes(startMin, endMinRaw){
+  let end = endMinRaw;
+  let crossMidnight = false;
+  if (end <= startMin){ end += 1440; crossMidnight = true; }
+  const totalTime = end - startMin;
+  let breakTime = 0;
+  if (!crossMidnight){ // BR-241: no break applied for cross-midnight records
+    for (const [bs,be] of BREAKS){
+      const overlap = Math.max(0, Math.min(end,be) - Math.max(startMin,bs));
+      breakTime += overlap;
+    }
+  }
+  const actualTime = totalTime - breakTime;
+  // entirely inside a break?
+  let insideBreak = false;
+  if (!crossMidnight){
+    for (const [bs,be] of BREAKS){ if (startMin>=bs && end<=be){ insideBreak = true; break; } }
+  }
+  // OT (display-only metric, does not affect productivity denominator)
+  let otMinutes = 0;
+  if (!crossMidnight && end > OT_START){
+    const otRawStart = Math.max(startMin, OT_START);
+    let otRaw = end - otRawStart;
+    for (const [bs,be] of BREAKS){
+      otRaw -= Math.max(0, Math.min(end,be) - Math.max(otRawStart,bs));
+    }
+    otMinutes = Math.floor(Math.max(0,otRaw)/30)*30; // UI/BR-244 round down to 30-min block
+  }
+  return { totalTime, breakTime, actualTime, crossMidnight, insideBreak, otMinutes };
+}
+
+function resolveStandardTime(maTP, workingTeam, congDoan, maNVL){
+  const row = DB.workCatalog.find(c=> c.workType==='Direct' && c.maTP===maTP && c.workingTeam===workingTeam
+    && c.congDoan===congDoan && (c.maNVL||'')===(maNVL||''));
+  return row ? row.thoiGianChuan : null;
+}
+/* Danh sách Công đoạn khả dụng cho 1 Mã TP + Tổ (Trực tiếp). */
+function getCongDoanOptions(maTP, workingTeam){
+  return [...new Set(DB.workCatalog.filter(c=> c.workType==='Direct' && c.maTP===maTP && c.workingTeam===workingTeam).map(c=>c.congDoan))];
+}
+/* Các dòng catalog khớp Mã TP+Tổ+Công đoạn — dùng để biết có cần chọn Mã NVL hay không, và liệt kê lựa chọn NVL. */
+function getNVLRowsFor(maTP, workingTeam, congDoan){
+  return DB.workCatalog.filter(c=> c.workType==='Direct' && c.maTP===maTP && c.workingTeam===workingTeam && c.congDoan===congDoan);
+}
+
+function overlapsExisting(maNV, dateStr, startMin, endMin, excludeId){
+  const cand = DB.workRecords.filter(r=> r.maNV===maNV && r.date===dateStr && r.id!==excludeId && r.status!=='Rejected');
+  const end = endMin<=startMin ? endMin+1440 : endMin;
+  for (const r of cand){
+    const rEnd = r.end<=r.start ? r.end+1440 : r.end;
+    if (startMin < rEnd && r.start < end) return r;
+  }
+  return null;
+}
+
+/* Nhãn hiển thị Sản phẩm/Việc cho Work Record — thêm hậu tố Mã NVL nếu có chọn. Dùng cho các modal/readout gọn (không phải bảng cột riêng). */
+function recordProductLabel(r){
+  if (r.workType!=='Direct') return esc(r.indirectType);
+  return esc(r.maTP) + ' · ' + esc(r.congDoan) + (r.maNVL ? ' <span class="hint" style="display:inline;margin:0;">(NVL: '+esc(r.maNVL)+')</span>' : '');
+}
+/* Tách riêng Mã TP/Tên TP/Mã NVL/Tên NVL/Công đoạn — dùng cho bảng Work Record theo đúng thứ tự cột chuẩn (mỗi trường 1 cột riêng). */
+function recordCatalogInfo(r){
+  if (r.workType!=='Direct') return { maTP:'', tenTP:'', maNVL:'', tenNVL:'', congDoan: r.indirectType||'' };
+  const row = DB.workCatalog.find(c=> c.workType==='Direct' && c.maTP===r.maTP && c.workingTeam===r.workingTeam
+    && c.congDoan===r.congDoan && (c.maNVL||'')===(r.maNVL||''));
+  return { maTP: r.maTP||'', tenTP: row?row.tenTP:'', maNVL: r.maNVL||'', tenNVL: row?row.tenNVL:'', congDoan: r.congDoan||'' };
+}
+/* TG thao tác chuẩn = Thời gian chuẩn x Số lượng (tổng phút chuẩn cho cả lô) — 0 với Gián tiếp. */
+function recordStandardTotal(r){
+  return r.workType==='Direct' ? fmt1(r.thoiGianChuan * r.quantity) : 0;
+}
+function recordProductivity(r){
+  if (r.workType!=='Direct') return null;
+  const stdMin = r.thoiGianChuan * r.quantity;
+  return r.actualTime>0 ? fmt1(stdMin/r.actualTime*100) : null;
+}
+
+/* Tính Năng suất theo công thức SUM(TGChuan*SL)/SUM(ActualTime)*100 cho 1 tập Work Record Trực tiếp
+   ĐÃ lọc sẵn (loại Rejected) — dùng chung cho cả theo-ngày (dailyProductivity) và theo-khoảng (Dashboard). */
+function productivityForRows(directRows){
+  const stdMin = directRows.reduce((s,r)=> s + r.thoiGianChuan*r.quantity, 0);
+  const actual = directRows.reduce((s,r)=> s + r.actualTime, 0);
+  return actual>0 ? fmt1(stdMin/actual*100) : null;
+}
+function dailyProductivity(maNV, dateStr){
+  const rows = DB.workRecords.filter(r=> r.maNV===maNV && r.date===dateStr && r.workType==='Direct' && r.status!=='Rejected');
+  return productivityForRows(rows);
+}
+
+/* Badge mau nhe cho cot "Loai" — dung chung o moi bang Work Record (renderRecordTable/viewApprove/viewAdminRecords). */
+function workTypeBadge(workType){
+  return workType==='Direct' ? '<span class="pill go">Trực tiếp</span>' : '<span class="pill amber">Gián tiếp</span>';
+}
+function productivityClass(p){
+  if (p===null||p===undefined) return 'na';
+  if (p>=100) return 'go';
+  if (p>=80) return 'amber';
+  return 'warn';
+}
+
+function addAudit(recordId, changedBy, action, before, after){
+  DB.auditLogs.push({id:uid(), recordId, changedBy, changedAt:Date.now(), action, before, after});
+}
+
+/* ---------------- Auth / session ---------------- */
+/* ---------------- API dùng chung (Google Sheets qua Apps Script) — GIAI ĐOẠN 1: Nhân viên/Tổ/Đăng nhập ----------------
+   Dán "Web app URL" sau khi Deploy Apps Script vào đây. Để trống ("") thì app hoạt động 100% cục bộ như trước,
+   không cần server — mọi hàm gọi apiCall() bên dưới sẽ tự nhận biết và dùng lại logic cũ (không đổi hành vi). */
+const API_URL = 'https://script.google.com/macros/s/AKfycbz2oq3lzaXoKpjKwXLKuHL7ZusJ7e5sLSGwspFR85LKAQeON40wQ-V8DU1G6Gr4U1Qa/exec';
+
+/* Gọi API Apps Script. Bất kỳ lý do gì khiến request thất bại (chưa deploy, mất mạng, CORS, server lỗi...)
+   đều trả về null một cách an toàn — nơi gọi hàm này sẽ tự fallback về chế độ cục bộ (DB.employees/DB.teams
+   thao tác trực tiếp trên trình duyệt như trước), không crash.
+   LƯU Ý KỸ THUẬT: KHÔNG set header Content-Type:application/json — Apps Script Web App không xử lý tốt
+   request "preflight" CORS mà trình duyệt tự thêm khi có header đó. Để fetch() tự dùng text/plain mặc định
+   (Apps Script vẫn đọc đúng JSON qua e.postData.contents bất kể Content-Type khai báo là gì) — đây là cách
+   né lỗi CORS kinh điển khi gọi Apps Script Web App. */
+async function apiCall(action, payload){
+  if (!API_URL) return null;
+  try {
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify(Object.assign({action}, payload)) });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch(err){
+    return null;
+  }
+}
+/* Sau khi đăng nhập thành công qua API, đồng bộ lại DB.employees/DB.teams từ Google Sheets (nguồn dùng chung),
+   thay cho dữ liệu cục bộ cũ — để mọi người cùng thấy đúng 1 danh sách. */
+async function syncEmployeesAndTeamsFromAPI(session){
+  const empResult = await apiCall('listEmployees', { session });
+  if (empResult && empResult.ok) DB.employees = empResult.employees;
+  const teamResult = await apiCall('listTeams', { session });
+  if (teamResult && teamResult.ok) DB.teams = teamResult.teams;
+  saveDB();
+}
+
+let currentSession = null; // {maNV, remember, loginAt, lastActive, passwordHash}
+
+function loadSession(){
+  const raw = localStorage.getItem(CONDOR_SESSION_KEY);
+  if (!raw) return null;
+  try{
+    const s = JSON.parse(raw);
+    const now = Date.now();
+    const idleExpired = (now - s.lastActive) > 8*3600*1000;
+    const rememberExpired = s.remember ? (now - s.loginAt) > 30*24*3600*1000 : true;
+    if (idleExpired && (!s.remember || rememberExpired)){ localStorage.removeItem(CONDOR_SESSION_KEY); return null; }
+    if (idleExpired && s.remember && !rememberExpired){ s.lastActive = now; localStorage.setItem(CONDOR_SESSION_KEY, JSON.stringify(s)); }
+    return s;
+  } catch(e){ return null; }
+}
+function touchSession(){
+  if (!currentSession) return;
+  currentSession.lastActive = Date.now();
+  localStorage.setItem(CONDOR_SESSION_KEY, JSON.stringify(currentSession));
+}
+function login(maNV, remember, passwordHash){
+  currentSession = {maNV, remember, loginAt:Date.now(), lastActive:Date.now(), passwordHash: passwordHash||null};
+  localStorage.setItem(CONDOR_SESSION_KEY, JSON.stringify(currentSession));
+}
+function logout(){ currentSession=null; localStorage.removeItem(CONDOR_SESSION_KEY); route='login'; render(); }
+function currentUser(){ return currentSession ? DB.employees.find(e=>e.maNV===currentSession.maNV) : null; }
+
+/* ---------------- Router / state ---------------- */
+let route = 'login';
+let adminTab = 'employees';
+let catalogSearch = '';
+let catalogFilterTo = '';
+let catalogFilterLoai = '';
+let catalogSort = {key:'workingTeam', dir:1};
+let catalogPage = 1;
+let catalogPageSize = 50;
+/* State dùng chung cho renderRecordTable() — component bảng Work Record tái sử dụng ở Lịch sử cá nhân
+   và Tất cả Work Record (Admin). 1 bộ state duy nhất, chia sẻ giữa các trang dùng chung component này. */
+let recordSearch = '';
+let recordPage = 1;
+let recordPageSize = 50;
+let recordMonthFilter = todayStr().slice(0,7); // yyyy-mm, mac dinh thang hien tai
+let recordSort = {key:'date', dir:-1};
+/* Bộ lọc Tổng quan (Dashboard cá nhân) — chuyển đổi giữa xem theo Tháng (mặc định) và theo 1 Ngày cụ thể. */
+let dashboardMode = 'month'; // 'month' | 'day'
+let dashboardMonthValue = todayStr().slice(0,7); // yyyy-mm, mac dinh thang hien tai
+let dashboardDayValue = todayStr(); // yyyy-mm-dd, mac dinh hom nay
+let importPreview = null; // {type, rows}
+
+function setRoute(r){ route=r; render(); }
+
+/* ---------------- Toast / Modal ---------------- */
+function showToast(msg, isErr){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.className='toast show'+(isErr?' err':'');
+  setTimeout(()=>t.classList.remove('show'), 2400);
+}
+function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
+function openModal(html){ document.getElementById('modalRoot').innerHTML =
+  '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'+html+'</div></div>'; }
+
+/* ---------------- Shell ---------------- */
+/* Icon set — inline SVG, no external icon CDN (giữ app hoạt động offline hoàn toàn). Thuần trình bày, không ảnh hưởng logic. */
+function navIcon(key){
+  const icons = {
+    dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"></rect><rect x="14" y="3" width="7" height="5" rx="1.5"></rect><rect x="14" y="12" width="7" height="9" rx="1.5"></rect><rect x="3" y="16" width="7" height="5" rx="1.5"></rect></svg>',
+    entry: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
+    history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 3"></path></svg>',
+    approve: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="m9 12 2 2 4-4"></path></svg>',
+    teamdash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>',
+    admin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"></path></svg>',
+    logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg>',
+  };
+  return icons[key] || '';
+}
+function kpiIcon(name){
+  const icons = {
+    target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="5"></circle><circle cx="12" cy="12" r="1"></circle></svg>',
+    clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path></svg>',
+    split: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h6v6H4z"></path><path d="M14 14h6v6h-6z"></path><path d="M10 7h4"></path><path d="M17 10v4"></path></svg>',
+    box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 8-9-5-9 5 9 5 9-5Z"></path><path d="M3 8v8l9 5 9-5V8"></path><path d="M12 13v8"></path></svg>',
+  };
+  return icons[name] || '';
+}
+
+function tabsForRole(role){
+  const t = [
+    {k:'dashboard', label:'Tổng quan'},
+    {k:'entry', label:'Nhập liệu'},
+    {k:'history', label:'Lịch sử'},
+  ];
+  if (role==='Leader' || role==='Admin'){
+    t.push({k:'approve', label:'Duyệt'});
+    t.push({k:'teamdash', label:'Tổ'});
+  }
+  if (role==='Admin'){
+    t.push({k:'admin', label:'Quản trị'});
+  }
+  return t;
+}
+
+function renderShell(bodyHtml){
+  const u = currentUser();
+  const tabs = tabsForRole(u.role);
+  const sidenav = tabs.map(t=>`<button data-route="${t.k}" class="sidenav-item ${route===t.k?'active':''}"><span class="sidenav-icon">${navIcon(t.k)}</span>${t.label}</button>`).join('');
+  const bottomnav = tabs.map(t=>`<button data-route="${t.k}" class="${route===t.k?'active':''}"><span class="ic">${navIcon(t.k)}</span>${t.label}</button>`).join('');
+  const pageTitle = (tabs.find(t=>t.k===route) || {label:'Condor Productivity'}).label;
+  return `
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="logo">C</div>
+        <div class="brand-titles">
+          <div class="brand-sub">CONDOR</div>
+          <div class="brand-title">Productivity System <span class="version-badge">v1.0</span></div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">${sidenav}</nav>
+      <div class="sidebar-profile">
+        <div class="profile-info"><b>${esc(u.ten)}</b><span>${esc(u.maNV)} · ${roleLabel(u.role)}</span></div>
+        <button class="profile-logout" data-action="logout" title="Đăng xuất">${navIcon('logout')}</button>
+      </div>
+    </aside>
+    <div class="content-area">
+      <div class="mobile-topbar">
+        <div class="logo">C</div>
+        <div class="titles">
+          <div class="line1">CÔNG TY TNHH CONDOR VIỆT NAM</div>
+          <h1>Condor Productivity</h1>
+        </div>
+        <div class="userbox"><b>${esc(u.ten)}</b>${esc(u.maNV)} · ${roleLabel(u.role)}</div>
+        <button class="logoutBtn" data-action="logout">Đăng xuất</button>
+      </div>
+      <header class="content-header">
+        <h1 class="page-title">${esc(pageTitle)}</h1>
+        <span class="offline-pill">&bull; Offline Mode</span>
+      </header>
+      <main>${bodyHtml}</main>
+    </div>
+  </div>
+  <div class="bottomtabs">${bottomnav}</div>
+  `;
+}
+function roleLabel(r){ return r==='Admin'?'Admin':r==='Leader'?'Tổ trưởng':'Nhân viên'; }
+
+/* ---------------- Views: LOGIN ---------------- */
+function viewLogin(){
+  return `
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="logo">CD</div>
+      <h1>Condor Productivity</h1>
+      <div class="sub">Đăng nhập bằng Mã nhân viên</div>
+      <div id="loginErr"></div>
+      <div class="field">
+        <label>Mã nhân viên <span class="req">*</span></label>
+        <input type="text" id="loginMaNV" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Mật khẩu <span class="req">*</span></label>
+        <input type="password" id="loginPw" autocomplete="current-password">
+      </div>
+      <div class="checkline"><input type="checkbox" id="loginRemember" checked> Ghi nhớ đăng nhập trên thiết bị này</div>
+      <button class="btn btn-primary" id="btnLogin">Đăng nhập</button>
+      <div class="banner">Bản offline — dữ liệu lưu trên trình duyệt này. Tài khoản mặc định: <b>Admin</b> / mật khẩu <b>Admin</b>. Vào mục Quản trị để thêm Tổ, Nhân viên...</div>
+      ${(!window.crypto || !window.crypto.subtle) ? '<div class="banner" style="margin-top:10px;">⚠️ Trình duyệt hiện tại không hỗ trợ Web Crypto API (crypto.subtle) — không thể đăng nhập. Hãy mở file này bằng Chrome/Edge/Firefox bản mới.</div>' : ''}
+      <div style="text-align:center;margin-top:14px;"><a href="#" id="resetToDefault" style="font-size:12.5px;color:#94a3b8;text-decoration:underline;">Không đăng nhập được? Đặt lại dữ liệu về mặc định</a></div>
+    </div>
+  </div>`;
+}
+
+/* ---------------- Biểu đồ Năng suất (Dashboard cá nhân) ---------------- */
+function daysInMonth(yyyymm){
+  const [y,m] = yyyymm.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+}
+/* Tính dữ liệu cho biểu đồ, đồng bộ theo chế độ lọc hiện tại:
+   - Tháng: trục X = từng ngày trong tháng (1..28/29/30/31), Y = Năng suất ngày đó (null nếu không có dữ liệu -> đứt đoạn).
+   - Ngày: trục X = từng khung giờ BẮT ĐẦU có Work Record Trực tiếp trong ngày đó (VD 7h, 8h, 9h...), Y = Năng suất gộp trong khung giờ đó. */
+function getDashboardChartData(maNV, isMonth, filterValue){
+  if (isMonth){
+    const totalDays = daysInMonth(filterValue);
+    const labels = [], data = [];
+    for (let d=1; d<=totalDays; d++){
+      const dateStr = filterValue + '-' + String(d).padStart(2,'0');
+      labels.push(String(d));
+      const dayRows = DB.workRecords.filter(r=> r.maNV===maNV && r.date===dateStr && r.workType==='Direct' && r.status!=='Rejected');
+      data.push(dayRows.length ? productivityForRows(dayRows) : null);
+    }
+    return { labels, data };
+  }
+  const dayRows = DB.workRecords.filter(r=> r.maNV===maNV && r.date===filterValue && r.workType==='Direct' && r.status!=='Rejected');
+  if (!dayRows.length) return { labels: [], data: [] };
+  const minH = Math.min(...dayRows.map(r=>Math.floor(r.start/60)));
+  const maxH = Math.max(...dayRows.map(r=>{ const end = r.end<=r.start ? r.end+1440 : r.end; return Math.floor(end/60); }));
+  const labels = [], data = [];
+  for (let h=minH; h<=Math.min(maxH,47); h++){
+    labels.push((h%24) + 'h');
+    const bucketRows = dayRows.filter(r=> Math.floor(r.start/60)===h);
+    data.push(bucketRows.length ? productivityForRows(bucketRows) : null);
+  }
+  return { labels, data };
+}
+let dashboardChartInstance = null;
+/* Vẽ/Vẽ lại biểu đồ Năng suất — PHẢI huỷ instance cũ trước khi tạo mới, vì #app (chứa <canvas>)
+   bị thay thế toàn bộ mỗi lần render(), nếu không huỷ Chart.js sẽ báo lỗi "Canvas already in use". */
+function initDashboardChart(retryCount){
+  retryCount = retryCount || 0;
+  const canvas = document.getElementById('dashboardProductivityChart');
+  if (!canvas) return; // khong phai trang Dashboard, khong lam gi
+  if (typeof Chart==='undefined'){
+    // Co the CDN chinh (cdnjs) that bai va dang cho CDN du phong (jsdelivr) tai xong - thu lai vai lan truoc khi bao loi that su.
+    if (retryCount < 5){ setTimeout(()=>initDashboardChart(retryCount+1), 600); return; }
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">⚠️ Không tải được thư viện biểu đồ (Chart.js) — cần kết nối Internet ở lần mở đầu tiên. Các phần khác của ứng dụng (KPI, bảng, nhập liệu...) vẫn hoạt động bình thường không cần mạng. Kiểm tra kết nối rồi tải lại trang.</div>';
+    return;
+  }
+  if (dashboardChartInstance){ dashboardChartInstance.destroy(); dashboardChartInstance = null; }
+  const u = currentUser();
+  const isMonth = dashboardMode==='month';
+  const filterValue = isMonth ? dashboardMonthValue : dashboardDayValue;
+  const { labels, data } = getDashboardChartData(u.maNV, isMonth, filterValue);
+  try {
+    dashboardChartInstance = new Chart(canvas, {
+      type: 'line',
+      data: { labels, datasets: [{
+        label: 'Năng suất (%)', data,
+        borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.08)',
+        borderWidth: 2, pointRadius: 3, pointBackgroundColor: '#2563eb',
+        tension: 0.3, spanGaps: false, fill: true,
+      }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display:false } },
+        scales: {
+          y: { beginAtZero:true, ticks:{ callback:v=>v+'%' } },
+          x: { grid:{ display:false } },
+        }
+      }
+    });
+  } catch(err){
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">⚠️ Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
+  }
+}
+
+/* ---------------- Views: EMPLOYEE DASHBOARD ---------------- */
+function viewDashboard(){
+  const u = currentUser();
+  const isMonth = dashboardMode==='month';
+  const filterValue = isMonth ? dashboardMonthValue : dashboardDayValue;
+  const rows = DB.workRecords.filter(r=> r.maNV===u.maNV && r.status!=='Rejected' && (isMonth ? r.date.startsWith(filterValue) : r.date===filterValue));
+  const direct = rows.filter(r=>r.workType==='Direct');
+  const indirect = rows.filter(r=>r.workType==='Indirect');
+  const totalTime = rows.reduce((s,r)=>s+r.actualTime,0);
+  const directTime = direct.reduce((s,r)=>s+r.actualTime,0);
+  const indirectTime = indirect.reduce((s,r)=>s+r.actualTime,0);
+  const qty = direct.reduce((s,r)=>s+r.quantity,0);
+  const prod = productivityForRows(direct);
+  const directPct = totalTime>0 ? fmt1(directTime/totalTime*100) : 0;
+  const indirectPct = totalTime>0 ? fmt1(indirectTime/totalTime*100) : 0;
+  const title = isMonth
+    ? `Tổng quan Tháng ${filterValue.slice(5,7)}/${filterValue.slice(0,4)}`
+    : `Tổng quan Ngày ${fmtDateVN(filterValue)}`;
+  const listTitle = isMonth ? `Work Record Tháng ${filterValue.slice(5,7)}/${filterValue.slice(0,4)}` : `Work Record Ngày ${fmtDateVN(filterValue)}`;
+  return renderShell(`
+    <div class="section-title" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
+      <span>${esc(title.toUpperCase())}</span>
+      <div class="toolbar" style="margin:0;">
+        <div class="btnlist" style="gap:6px;">
+          <button data-action="dashboardSetMode" data-val="month" class="${isMonth?'active':''}" style="min-height:38px;padding:8px 16px;">Tháng</button>
+          <button data-action="dashboardSetMode" data-val="day" class="${!isMonth?'active':''}" style="min-height:38px;padding:8px 16px;">Ngày</button>
+        </div>
+        ${isMonth
+          ? `<input type="month" id="dashboardMonthInput" value="${dashboardMonthValue}">`
+          : `<input type="date" id="dashboardDayInput" value="${dashboardDayValue}">`}
+      </div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box emerald">${kpiIcon('target')}</div>
+        <div><div class="l">Năng suất</div><div class="v">${prod!==null?prod+'%':'—'}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box blue">${kpiIcon('clock')}</div>
+        <div><div class="l">Tổng thời gian (phút)</div><div class="v">${totalTime}</div></div></div></div>
+      <div class="kpi">
+        <div class="kpi-icon-row"><div class="kpi-icon-box violet">${kpiIcon('split')}</div>
+          <div style="flex:1;min-width:0;"><div class="l">Trực tiếp / Gián tiếp</div><div class="v" style="font-size:17px;">${directTime} / ${indirectTime} phút</div></div></div>
+        <div class="split-bar"><div class="seg-a" style="width:${directPct}%;"></div><div class="seg-b" style="width:${indirectPct}%;"></div></div>
+        <div class="split-bar-legend"><span class="a">${directPct}% Trực tiếp</span><span class="b">${indirectPct}% Gián tiếp</span></div>
+      </div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box amber">${kpiIcon('box')}</div>
+        <div><div class="l">Sản lượng</div><div class="v">${qty}</div></div></div></div>
+    </div>
+    <div class="card">
+      <div class="section-title">Biến động Năng suất ${isMonth?'theo Ngày':'theo Giờ'}</div>
+      <div style="height:220px;position:relative;"><canvas id="dashboardProductivityChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="section-title">${esc(listTitle)} (${rows.length})</div>
+      ${renderRecordTable(rows, {showToolbar:false})}
+    </div>
+    <button class="btn btn-primary" data-route="entry">+ Nhập Work Record mới</button>
+  `);
+}
+function fmtDateVN(s){ const [y,m,d]=s.split('-'); return `${d}/${m}/${y}`; }
+
+/* ---------------- Views: ENTRY FORM ---------------- */
+let entryState = null;
+function freshEntryState(){
+  return { date:todayStr(), workType:'Direct', workingTeam:null, maTP:null, congDoan:null, maNVL:null, tenNVL:null,
+    quantity:0, startH:'07', startM:'00', endH:'07', endM:'00', indirectType:null, note:'', productSearch:'', errors:{} };
+}
+function viewEntry(){
+  const u = currentUser();
+  if (!entryState) entryState = freshEntryState();
+  const s = entryState;
+  const permittedTeams = getPermittedTeams(u.maNV);
+  const teamBtns = permittedTeams.map(t=>`<button data-action="entrySetTeam" data-val="${esc(t)}" class="${s.workingTeam===t?'active':''}">${esc(t)}</button>`).join('');
+
+  let productSection = '';
+  if (s.workType==='Direct'){
+    const directRows = s.workingTeam ? DB.workCatalog.filter(c=>c.workType==='Direct' && c.workingTeam===s.workingTeam) : [];
+    const prodMap = {}; directRows.forEach(c=>{ prodMap[c.maTP] = c.tenTP; });
+    let prodEntries = Object.entries(prodMap);
+    const totalProdMatches = prodEntries.length;
+    if (s.productSearch){
+      const q = s.productSearch.toLowerCase();
+      prodEntries = prodEntries.filter(([maTP,tenTP])=> maTP.toLowerCase().includes(q) || (tenTP||'').toLowerCase().includes(q));
+    }
+    const shownCount = prodEntries.length;
+    const PROD_LIMIT = 5;
+    const prodBtns = prodEntries.slice(0,PROD_LIMIT).map(([maTP,tenTP])=>`<button data-action="entrySetProduct" data-val="${esc(maTP)}" class="${s.maTP===maTP?'active':''}">${esc(maTP)} — ${esc(tenTP)}</button>`).join('');
+    const congDoanOptions = s.maTP ? getCongDoanOptions(s.maTP, s.workingTeam) : [];
+    const procBtns = congDoanOptions.map(cd=>`<button data-action="entrySetProcess" data-val="${esc(cd)}" class="${s.congDoan===cd?'active':''}">${esc(cd)}</button>`).join('');
+
+    const nvlRows = (s.maTP && s.congDoan) ? getNVLRowsFor(s.maTP, s.workingTeam, s.congDoan) : [];
+    const needsNVL = nvlRows.some(r=>r.maNVL);
+    let nvlSection = '';
+    if (needsNVL){
+      const nvlBtns = nvlRows.filter(r=>r.maNVL).map(r=>`<button data-action="entrySetNVL" data-val="${esc(r.maNVL)}" data-tenNVL="${esc(r.tenNVL||'')}" class="${s.maNVL===r.maNVL?'active':''}">${esc(r.maNVL)} — ${esc(r.tenNVL||'')}</button>`).join('');
+      nvlSection = `<div class="field ${s.errors.maNVL?'has-err':''}"><label>Mã NVL <span class="req">*</span></label>
+        <div class="btnlist">${nvlBtns}</div></div>`;
+    }
+    const effectiveNVL = needsNVL ? s.maNVL : '';
+    const st = (s.maTP && s.congDoan && (!needsNVL || s.maNVL)) ? resolveStandardTime(s.maTP, s.workingTeam, s.congDoan, effectiveNVL) : null;
+    productSection = `
+      <div class="card">
+        <div class="section-title">Sản phẩm &amp; định mức</div>
+        <div class="field ${s.errors.workingTeam?'has-err':''}"><label>Working Team <span class="req">*</span></label>
+          <div class="btnlist">${teamBtns || '<div class="hint">Chưa có Tổ nào trong hệ thống.</div>'}</div></div>
+        <div class="field ${s.errors.maTP?'has-err':''}"><label>Mã thành phẩm <span class="req">*</span></label>
+          ${s.workingTeam ? `<div class="search-wrap" style="margin-bottom:8px;">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+            <input type="text" id="entryProductSearch" placeholder="Tìm Mã TP / Tên TP" value="${esc(s.productSearch||'')}">
+          </div>` : ''}
+          <div class="btnlist">${prodBtns || (s.workingTeam ? '<div class="hint">Không tìm thấy Mã TP phù hợp.</div>' : '<div class="hint">Chọn Working Team trước.</div>')}</div>
+          ${s.workingTeam && shownCount>PROD_LIMIT ? `<div class="hint">Hiện ${PROD_LIMIT}/${shownCount} kết quả — gõ tìm để thu hẹp thêm.</div>` : ''}
+          ${s.workingTeam && !s.productSearch && totalProdMatches>PROD_LIMIT ? `<div class="hint">Tổ này có ${totalProdMatches} Mã TP — gõ tìm để lọc nhanh hơn.</div>` : ''}
+        </div>
+        <div class="field ${s.errors.congDoan?'has-err':''}"><label>Công đoạn <span class="req">*</span></label>
+          <div class="btnlist">${procBtns || '<div class="hint">Chọn Mã thành phẩm trước.</div>'}</div></div>
+        ${nvlSection}
+        <div class="row2">
+          <div class="field"><label>Thời gian chuẩn (phút/SP)</label>
+            <div class="readout">${st!==null ? fmt3(st) : ((s.maTP&&s.congDoan)? 'Chưa có định mức phù hợp' : '—')}</div></div>
+          <div class="field ${s.errors.quantity?'has-err':''}"><label>Số lượng <span class="req">*</span></label>
+            <input type="number" min="0" step="1" id="entryQty" value="${s.quantity}"></div>
+        </div>
+        ${s.errors.quantity?`<div class="err">${s.errors.quantity}</div>`:''}
+        ${s.errors.standardTime?`<div class="err">${s.errors.standardTime}</div>`:''}
+      </div>`;
+  } else {
+    const indirectOptions = s.workingTeam ? [...new Set(DB.workCatalog.filter(c=>c.workType==='Indirect' && c.workingTeam===s.workingTeam).map(c=>c.congDoan))] : [];
+    const typeBtns = indirectOptions.map(cd=>`<button data-action="entrySetIndirect" data-val="${esc(cd)}" class="${s.indirectType===cd?'active':''}">${esc(cd)}</button>`).join('');
+    productSection = `
+      <div class="card">
+        <div class="section-title">Việc gián tiếp</div>
+        <div class="field ${s.errors.workingTeam?'has-err':''}"><label>Working Team <span class="req">*</span></label>
+          <div class="btnlist">${teamBtns || '<div class="hint">Chưa được cấp quyền Working Team nào.</div>'}</div></div>
+        <div class="field ${s.errors.indirectType?'has-err':''}"><label>Công đoạn (gián tiếp) <span class="req">*</span></label>
+          <div class="btnlist">${typeBtns || '<div class="hint">Chọn Working Team trước.</div>'}</div></div>
+        <div class="hint">Số lượng mặc định = 0, không cần nhập.</div>
+      </div>`;
+  }
+
+  const hourOpts = Array.from({length:24},(_,i)=>String(i).padStart(2,'0'));
+  const minOpts = ['00','10','20','30','40','50'];
+  const sel = (id,val,opts)=> `<select id="${id}">${opts.map(o=>`<option value="${o}" ${o===val?'selected':''}>${o}</option>`).join('')}</select>`;
+
+  return renderShell(`
+    <div class="card">
+      <div class="section-title">Thông tin ca làm việc</div>
+      <div class="field"><label>Ngày <span class="req">*</span></label><input type="date" id="entryDate" value="${s.date}"></div>
+      <div class="field"><label>Loại công việc <span class="req">*</span></label>
+        <div class="btnlist grow">
+          <button data-action="entrySetType" data-val="Direct" class="${s.workType==='Direct'?'active':''}">Trực tiếp</button>
+          <button data-action="entrySetType" data-val="Indirect" class="${s.workType==='Indirect'?'active':''}">Gián tiếp</button>
+        </div>
+      </div>
+    </div>
+    ${productSection}
+    <div class="card">
+      <div class="section-title">Thời gian thực tế</div>
+      <div class="row2">
+        <div class="field"><label>Giờ bắt đầu <span class="req">*</span></label>
+          <div style="display:flex;gap:6px;">${sel('entryStartH',s.startH,hourOpts)}${sel('entryStartM',s.startM,minOpts)}</div></div>
+        <div class="field"><label>Giờ kết thúc <span class="req">*</span></label>
+          <div style="display:flex;gap:6px;">${sel('entryEndH',s.endH,hourOpts)}${sel('entryEndM',s.endM,minOpts)}</div></div>
+      </div>
+      ${s.errors.time?`<div class="err">${s.errors.time}</div>`:''}
+      <div class="hint">Giờ làm tròn theo block 10 phút. Break cố định: 10:00–10:10, 12:00–13:00, 15:00–15:10, 17:00–17:15. OT tính từ 17:15.</div>
+    </div>
+    <div class="card">
+      <div class="field" style="margin-bottom:0;"><label>Ghi chú <span class="hint" style="display:inline;margin:0;">(không bắt buộc)</span></label>
+        <input type="text" id="entryNote" placeholder="Ghi chú thêm nếu cần..." value="${esc(s.note||'')}"></div>
+    </div>
+    <button class="btn btn-primary" data-action="submitEntry">Lưu dữ liệu</button>
+  `);
+}
+
+/* ---------------- Views: HISTORY ---------------- */
+function viewHistory(){
+  const u = currentUser();
+  const rows = DB.workRecords.filter(r=>r.maNV===u.maNV);
+  return renderShell(`
+    <div class="card">
+      <div class="section-title">Lịch sử Work Record</div>
+      ${renderRecordTable(rows, {withEdit:true, showToolbar:true, withMonthFilter:true})}
+    </div>
+  `);
+}
+
+/**
+ * Component bảng Work Record dùng chung (Reusable) — tự lọc theo Tháng + Tìm kiếm, tự phân trang,
+ * tự sắp xếp (nếu bật), rồi mới render các <tr>. Dùng chung cho Lịch sử cá nhân (viewHistory) và
+ * Tất cả Work Record (viewAdminRecords) — đảm bảo 2 trang có cùng 1 hành vi lọc/tìm/phân trang.
+ *
+ * @param {Array}  allRows  Toàn bộ Work Record CHƯA lọc — hàm tự lọc bên trong theo state toàn cục
+ *                          (recordMonthFilter, recordSearch, recordPage, recordPageSize, recordSort).
+ * @param {Object} config   Tuỳ chọn hiển thị (tất cả optional):
+ *   withEdit          bool  Hiện nút "Sửa" — dùng cho Lịch sử cá nhân (chỉ sửa được bản ghi của
+ *                            chính người đang đăng nhập, và chưa bị khoá 24h / hoặc đang Rejected).
+ *   withAdminActions  bool  Hiện nút "Log" + "Xóa" — dùng cho Tất cả Work Record (Admin).
+ *   showToolbar       bool  Có hiện toolbar Tháng/Tìm kiếm + thanh phân trang hay không.
+ *                            Mặc định true. Tắt cho Dashboard/Team Dashboard (dữ liệu đã tự nhỏ gọn
+ *                            theo ngày/khoảng ngày riêng của các trang đó, không cần thêm lớp lọc).
+ *   withMonthFilter   bool  Trong toolbar có ô chọn Tháng hay không. Mặc định = showToolbar.
+ *   sortable          bool  Cho phép bấm tiêu đề cột để sắp xếp. Mặc định false (giữ thứ tự mới nhất
+ *                            trước). Bật cho Tất cả Work Record (Admin) để giữ đúng khả năng cũ.
+ * @returns {string} HTML (toolbar + bảng + phân trang), gồm cả trạng thái rỗng nếu không có dữ liệu.
+ */
+function renderRecordTable(allRows, config){
+  config = config || {};
+  const showToolbar = config.showToolbar !== false;
+  const withMonthFilter = config.withMonthFilter !== undefined ? config.withMonthFilter : showToolbar;
+  const withEdit = !!config.withEdit;
+  const withAdminActions = !!config.withAdminActions;
+  const sortable = !!config.sortable;
+
+  // ---- 1) Lọc theo Tháng (nếu bật) ----
+  let rows = allRows.slice();
+  if (withMonthFilter && recordMonthFilter){
+    rows = rows.filter(r => r.date.startsWith(recordMonthFilter));
+  }
+
+  // ---- 2) Lọc theo Tìm kiếm: Mã NV / Tên / Mã TP / Công đoạn (kể cả Việc gián tiếp) ----
+  if (showToolbar && recordSearch){
+    const q = recordSearch.toLowerCase();
+    rows = rows.filter(r =>
+      r.maNV.toLowerCase().includes(q) || r.ten.toLowerCase().includes(q) ||
+      (r.maTP||'').toLowerCase().includes(q) || (r.congDoan||r.indirectType||'').toLowerCase().includes(q)
+    );
+  }
+
+  // ---- 3) Sắp xếp: theo cột nếu sortable, ngược lại mặc định mới nhất trước ----
+  if (sortable){
+    rows.sort((a,b) => {
+      const k = recordSort.key;
+      let av = a[k], bv = b[k];
+      if (typeof av==='string') return recordSort.dir*av.localeCompare(bv);
+      return recordSort.dir*((av||0)-(bv||0));
+    });
+  } else {
+    rows.sort((a,b) => (b.date+String(b.start)).localeCompare(a.date+String(a.start)));
+  }
+
+  // ---- 4) Phân trang (chỉ khi bật toolbar) ----
+  const totalFiltered = rows.length;
+  let pageRows = rows;
+  let totalPages = 1;
+  if (showToolbar){
+    totalPages = Math.max(1, Math.ceil(totalFiltered/recordPageSize));
+    if (recordPage > totalPages) recordPage = totalPages;
+    if (recordPage < 1) recordPage = 1;
+    const startIdx = (recordPage-1)*recordPageSize;
+    pageRows = rows.slice(startIdx, startIdx+recordPageSize);
+  }
+
+  // ---- 5) Toolbar (Tháng + Tìm kiếm) ----
+  const toolbarHtml = showToolbar ? `
+    <div class="toolbar">
+      ${withMonthFilter ? `<label style="margin:0;">Tháng:</label><input type="month" id="recordMonthInput" value="${recordMonthFilter}">` : ''}
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+        <input type="text" id="recordSearchInput" placeholder="Tìm Mã NV / Tên / Mã TP / Công đoạn" value="${esc(recordSearch)}">
+      </div>
+    </div>
+    <div class="hint" style="margin-bottom:10px;">${totalFiltered} kết quả${(recordSearch||withMonthFilter)?' (đã lọc)':''}</div>
+  ` : '';
+
+  // ---- 6) Bảng dữ liệu ----
+  const th = (key,label) => sortable
+    ? `<th data-action="recordSort" data-val="${key}" class="${recordSort.key===key?'sorted':''}">${label} ${recordSort.key===key?(recordSort.dir>0?'▲':'▼'):''}</th>`
+    : `<th>${label}</th>`;
+  const now = Date.now();
+  const tableHtml = pageRows.length ? `<div class="tablewrap"><table><thead><tr>
+    ${th('date','Ngày')}${th('maNV','Mã NV')}${th('ten','Tên')}<th>Tổ</th>${th('workType','Loại')}${th('workingTeam','Tổ')}
+    <th>Mã TP</th><th>Tên TP</th><th>Mã NVL</th><th>Tên NVL</th><th>Công đoạn</th>
+    <th>TG chuẩn</th>${th('quantity','SL')}<th>Bắt đầu</th><th>Kết thúc</th>
+    <th>TG thao tác</th><th>TG giải lao</th><th>Tổng TG</th><th>TG thao tác chuẩn</th>
+    <th>Năng suất</th><th>Ghi chú</th>${th('status','Trạng thái')}${(withEdit||withAdminActions)?'<th></th>':''}
+  </tr></thead><tbody>
+  ${pageRows.map(r=>{
+    const p = recordProductivity(r);
+    const info = recordCatalogInfo(r);
+    const locked = (now - r.createdAt) > 24*3600*1000;
+    const canEdit = withEdit && r.maNV===currentUser().maNV && (r.status==='Rejected' || !locked);
+    return `<tr class="${r.needsStandardTime?'row-warn':''}">
+      <td>${fmtDateVN(r.date)}</td><td>${esc(r.maNV)}</td><td>${esc(r.ten)}</td><td>${esc(employeeTeamOf(r.maNV))}</td>
+      <td>${workTypeBadge(r.workType)}</td><td>${esc(r.workingTeam)}</td>
+      <td>${esc(info.maTP)}</td><td>${esc(info.tenTP)}</td><td>${esc(info.maNVL)}</td><td>${esc(info.tenNVL)}</td><td>${esc(info.congDoan)}</td>
+      <td>${r.workType==='Direct'?fmt3(r.thoiGianChuan):'—'}${r.needsStandardTime?' <span class="pill amber">Thiếu TGC</span>':''}</td><td>${r.quantity}</td>
+      <td>${minToHHMM(r.start)}</td><td>${minToHHMM(r.end)}</td>
+      <td>${r.actualTime}</td><td>${r.breakTime}</td><td>${r.totalTime}</td><td>${recordStandardTotal(r)}</td>
+      <td>${p!==null?`<span class="pill ${productivityClass(p)}">${p}%</span>`:'<span class="pill na">—</span>'}</td>
+      <td>${esc(r.note||'')}</td>
+      <td>${statusPill(r)}</td>
+      ${withEdit?`<td>${canEdit?`<button class="btn btn-outline btn-sm" data-action="editRecord" data-id="${r.id}">Sửa</button>`:''}</td>`:''}
+      ${withAdminActions?`<td style="white-space:nowrap;">
+        <button class="btn btn-outline btn-sm" data-action="viewAudit" data-id="${r.id}">Log</button>
+        <button class="btn btn-danger btn-sm" data-action="deleteRecord" data-id="${r.id}">Xóa</button>
+      </td>`:''}
+    </tr>`;
+  }).join('')}
+  </tbody></table></div>` : '<div class="empty">Chưa có dữ liệu</div>';
+
+  // ---- 7) Thanh phân trang (chỉ khi bật toolbar và có dữ liệu) ----
+  const paginationHtml = (showToolbar && totalFiltered>0) ? `
+    <div class="toolbar" style="margin-top:12px;justify-content:space-between;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label style="margin:0;font-size:13px;">Số dòng/trang:</label>
+        <select id="recordPageSizeSelect">
+          <option value="50" ${recordPageSize===50?'selected':''}>50</option>
+          <option value="100" ${recordPageSize===100?'selected':''}>100</option>
+          <option value="200" ${recordPageSize===200?'selected':''}>200</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-outline btn-sm" data-action="recordPrevPage" ${recordPage<=1?'disabled':''}>← Trước</button>
+        <span style="font-size:13px;color:var(--ink-soft);">Trang ${recordPage}/${totalPages}</span>
+        <button class="btn btn-outline btn-sm" data-action="recordNextPage" ${recordPage>=totalPages?'disabled':''}>Sau →</button>
+      </div>
+    </div>` : '';
+
+  return toolbarHtml + tableHtml + paginationHtml;
+}
+function statusPill(r){
+  if (r.status==='Approved') return '<span class="pill go">Đã duyệt</span>';
+  if (r.status==='Rejected') return `<span class="pill warn" title="${esc(r.rejectReason||'')}">Từ chối</span>`;
+  return '<span class="pill amber">Chờ duyệt</span>';
+}
+
+/* ---------------- Views: LEADER APPROVE ---------------- */
+let approveSelection = new Set();
+function viewApprove(){
+  const u = currentUser();
+  const scope = u.role==='Admin' ? null : teamLedBy(u.maNV);
+  const pending = DB.workRecords.filter(r=> r.status==='Pending' && (scope? r.workingTeam===scope : true))
+    .sort((a,b)=> a.createdAt - b.createdAt);
+  return renderShell(`
+    <div class="section-title">Chờ duyệt ${scope?'— Team '+esc(scope):'(toàn bộ)'} (${pending.length})</div>
+    ${pending.length? `
+    <div class="toolbar">
+      <button class="btn btn-outline btn-sm" data-action="selectAllPending">Chọn tất cả</button>
+    </div>
+    <div class="card"><div class="tablewrap"><table><thead><tr>
+      <th></th><th>Ngày</th><th>Mã NV</th><th>Tên</th><th>Tổ</th><th>Loại</th><th>Tổ</th>
+      <th>Mã TP</th><th>Tên TP</th><th>Mã NVL</th><th>Tên NVL</th><th>Công đoạn</th>
+      <th>TG chuẩn</th><th>SL</th><th>Bắt đầu</th><th>Kết thúc</th>
+      <th>TG thao tác</th><th>TG giải lao</th><th>Tổng TG</th><th>TG thao tác chuẩn</th>
+      <th>Năng suất</th><th>Ghi chú</th><th></th>
+    </tr></thead><tbody>
+    ${pending.map(r=>{
+      const p = recordProductivity(r);
+      const info = recordCatalogInfo(r);
+      return `<tr class="${r.needsStandardTime?'row-warn':''}">
+        <td><input type="checkbox" data-approve-check="${r.id}" ${approveSelection.has(r.id)?'checked':''}></td>
+        <td>${fmtDateVN(r.date)}</td><td>${esc(r.maNV)}</td><td>${esc(r.ten)}</td><td>${esc(employeeTeamOf(r.maNV))}</td>
+        <td>${workTypeBadge(r.workType)}</td><td>${esc(r.workingTeam)}</td>
+        <td>${esc(info.maTP)}</td><td>${esc(info.tenTP)}</td><td>${esc(info.maNVL)}</td><td>${esc(info.tenNVL)}</td><td>${esc(info.congDoan)}</td>
+        <td>${r.workType==='Direct'?fmt3(r.thoiGianChuan):'—'}${r.needsStandardTime?' <span class="pill amber">Thiếu TGC</span>':''}</td><td>${r.quantity}</td>
+        <td>${minToHHMM(r.start)}</td><td>${minToHHMM(r.end)}</td>
+        <td>${r.actualTime}</td><td>${r.breakTime}</td><td>${r.totalTime}</td><td>${recordStandardTotal(r)}</td>
+        <td>${p!==null?p+'%':'—'}</td>
+        <td>${esc(r.note||'')}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-primary btn-sm" style="width:auto;" data-action="approveOne" data-id="${r.id}">Duyệt</button>
+          <button class="btn btn-danger btn-sm" style="width:auto;" data-action="rejectOne" data-id="${r.id}">Từ chối</button>
+        </td>
+      </tr>`;
+    }).join('')}
+    </tbody></table></div></div>
+    ${approveSelection.size>0? `
+    <div class="floating-bar">
+      <span>Đã chọn ${approveSelection.size} bản ghi</span>
+      <button class="btn-floating-approve" data-action="bulkApprove">Duyệt hàng loạt</button>
+    </div>` : ''}
+    ` : '<div class="empty">Chưa có dữ liệu</div>'}
+  `);
+}
+function employeeTeamOf(maNV){ const e=DB.employees.find(x=>x.maNV===maNV); return e?e.employeeTeam:null; }
+/* Team mà 1 Leader thực sự quản lý (Team.leaderMaNV) — dùng để scope Duyệt/Dashboard theo WORKING TEAM của
+   Work Record, KHÔNG phải theo Employee Team (Tổ chính) của người nhập. Nhân viên làm ở Tổ khác phải được
+   Leader của Tổ đó duyệt, không phải Leader của Tổ mình. */
+function teamLedBy(maNV){ const t = DB.teams.find(x=>x.leaderMaNV===maNV); return t ? t.name : null; }
+/* Nhân viên được chọn TỰ DO bất kỳ Tổ nào đang có trong hệ thống khi nhập liệu (đã bỏ cơ chế
+   "Tổ khác cần Admin cấp quyền trước" trước đây). Tổ chính (Employee Team) vẫn giữ làm thông tin
+   hồ sơ/báo cáo, không còn dùng để giới hạn Tổ được chọn khi nhập liệu. */
+function getPermittedTeams(maNV){
+  return DB.teams.map(t=>t.name);
+}
+
+/* ---------------- Views: TEAM DASHBOARD ---------------- */
+function viewTeamDash(){
+  const u = currentUser();
+  const isAdmin = u.role==='Admin';
+  const scope = isAdmin ? null : teamLedBy(u.maNV);
+  const from = document.getElementById('tdFrom')?.value || todayStr();
+  const to = document.getElementById('tdTo')?.value || todayStr();
+  const rows = DB.workRecords.filter(r=>{
+    if (scope && r.workingTeam!==scope) return false;
+    return r.date >= (window._tdFrom||todayStr()) && r.date <= (window._tdTo||todayStr());
+  });
+  window._tdFrom = window._tdFrom || todayStr();
+  window._tdTo = window._tdTo || todayStr();
+
+  // Rejected không tính vào KPI/Productivity (khớp quy ước của dailyProductivity()) — nhưng vẫn hiển thị
+  // đầy đủ (kể cả Rejected) ở bảng "Chi tiết Work Record" bên dưới để Leader thấy được cần theo dõi gì.
+  const kpiRows = rows.filter(r=>r.status!=='Rejected');
+
+  // group by maNV+date for daily productivity, then avg per employee for the range
+  const byEmp = {};
+  kpiRows.filter(r=>r.workType==='Direct').forEach(r=>{
+    const key = r.maNV;
+    if (!byEmp[key]) byEmp[key] = {maNV:r.maNV, ten:r.ten, stdMin:0, actual:0, qty:0};
+    byEmp[key].stdMin += r.thoiGianChuan*r.quantity;
+    byEmp[key].actual += r.actualTime;
+    byEmp[key].qty += r.quantity;
+  });
+  const empRows = Object.values(byEmp).map(e=>({...e, prod: e.actual>0? fmt1(e.stdMin/e.actual*100) : null}));
+  empRows.sort((a,b)=> (b.prod||0)-(a.prod||0));
+
+  const avg = empRows.length? fmt1(empRows.reduce((s,e)=>s+(e.prod||0),0)/empRows.length) : null;
+  const totalDirect = kpiRows.filter(r=>r.workType==='Direct').reduce((s,r)=>s+r.actualTime,0);
+  const totalIndirect = kpiRows.filter(r=>r.workType==='Indirect').reduce((s,r)=>s+r.actualTime,0);
+
+  const maxProd = Math.max(100, ...empRows.map(e=>e.prod||0), 1);
+
+  return renderShell(`
+    <div class="toolbar">
+      <label style="margin:0;">Từ:</label><input type="date" id="tdFrom" value="${window._tdFrom}">
+      <label style="margin:0;">Đến:</label><input type="date" id="tdTo" value="${window._tdTo}">
+      <button class="btn btn-outline btn-sm" data-action="applyTeamDash">Lọc</button>
+      <button class="btn btn-outline btn-sm" data-action="exportTeamRecords">Xuất Excel (.csv)</button>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="l">Năng suất TB Tổ</div><div class="v">${avg!==null?avg+'%':'—'}</div></div>
+      <div class="kpi"><div class="l">Tổng Direct Time</div><div class="v">${totalDirect} ph</div></div>
+      <div class="kpi"><div class="l">Tổng Indirect Time</div><div class="v">${totalIndirect} ph</div></div>
+      <div class="kpi"><div class="l">Số nhân viên</div><div class="v">${empRows.length}</div></div>
+    </div>
+    <div class="card">
+      <div class="section-title">Năng suất theo nhân viên</div>
+      ${empRows.length? empRows.map(e=>`
+        <div class="barrow">
+          <div>${esc(e.ten)} (${esc(e.maNV)})</div>
+          <div class="bar" style="width:${e.prod?Math.min(100,e.prod/maxProd*100):0}%;background:${e.prod>=100?'#2f9e58':e.prod>=80?'#c98a1c':'#e8622c'};"></div>
+          <div>${e.prod!==null?e.prod+'%':'—'}</div>
+        </div>`).join('') : '<div class="empty">Chưa có dữ liệu</div>'}
+    </div>
+    <div class="card">
+      <div class="section-title">Chi tiết Work Record (${rows.length})</div>
+      ${renderRecordTable(rows, {showToolbar:false})}
+    </div>
+    <div class="card">
+      <div class="section-title">Import Work Record (nhập liệu hàng loạt cho nhiều người)</div>
+      <div class="hint">Định dạng cột <b>giống hệt file Xuất Excel</b> (22 cột) để dễ đối chiếu. Cột <b>bắt buộc điền</b>: Ngay (yyyy-mm-dd), MaNV, Loai (TrucTiep/GianTiep), ToLamViec, MaTP (Trực tiếp), MaNVL (chỉ khi có phân hoá NVL), CongDoan, SoLuong, TGBatDau (HH:MM), TGKetThuc (HH:MM), GhiChu (không bắt buộc). Các cột còn lại (Ten, ToChinh, TenTP, TenNVL, TGChuan, TGThaoTac, TGGiaiLao, TongTG, TGThaoTacChuan, NangSuat, TrangThai) <b>để trống</b> — hệ thống tự tính lại toàn bộ, không đọc giá trị anh điền vào các cột này.
+        Với Gián tiếp: để trống MaTP, CongDoan = tên việc gián tiếp, SL để trống.
+        Mỗi dòng được kiểm tra đầy đủ theo rule hiện hành (quyền Tổ, trùng giờ, Break, Thời gian chuẩn...) trước khi cho xem trước — dòng lỗi sẽ bị loại, chỉ import dòng hợp lệ. Sau import, trạng thái là <b>Chờ duyệt</b> như nhập tay bình thường.
+        ${scope? `Bạn chỉ được import cho Tổ <b>${esc(scope)}</b> (Tổ mình quản lý).` : ''}</div>
+      <button class="btn btn-outline btn-sm" style="margin-top:8px;" data-action="downloadTemplate" data-val="workrecords">Tải file mẫu (.xlsx)</button>
+      <input type="file" id="importFileWR" accept=".xlsx,.xls,.csv" style="margin-top:10px;">
+      <button class="btn btn-primary" style="margin-top:10px;" data-action="parseWorkRecordImport">Xem trước dữ liệu</button>
+    </div>
+  `);
+}
+
+/* ---------------- Views: ADMIN ---------------- */
+function viewAdmin(){
+  const tabs = [
+    ['employees','Nhân viên'],['teams','Tổ'],['catalog','Sản phẩm/TGC/Gián tiếp'],
+    ['records','Tất cả Work Record'],['accounts','Tài khoản'],['backup','Backup'],
+  ];
+  const strip = tabs.map(([k,l])=>`<button data-action="adminTab" data-val="${k}" class="${adminTab===k?'active':''}">${l}</button>`).join('');
+  let body = '';
+  if (adminTab==='records') body = viewAdminRecords();
+  else if (adminTab==='accounts') body = viewAdminAccounts();
+  else if (adminTab==='backup') body = viewAdminBackup();
+  else body = viewAdminImport(adminTab);
+  return renderShell(`<div class="tabstrip">${strip}</div>${body}`);
+}
+
+/* Cột chuẩn cho từng loại import — đổi ở đây nếu anh dùng tên cột khác trong file Excel thật.
+   "Tải file mẫu" (downloadTemplate) sinh file .xlsx trực tiếp từ đúng danh sách cột + 1-2 dòng ví dụ này,
+   nên nếu anh sửa TEMPLATES bên dưới thì file mẫu tải xuống sẽ tự khớp theo, không cần sửa 2 nơi. */
+const TEMPLATES = {
+  employees:{ filename:'mau_import_nhanvien.xlsx', headers:['MNV','Tên','Tổ','Role','Trangthai'],
+    sample:[['38','Huyền','Purasuchikku','Employee','Active'],['LEAD-PU','Tổ trưởng Purasuchikku','Purasuchikku','Leader','Active'],['Admin','Admin','','Admin','Active']] },
+  teams:{ filename:'mau_import_to.xlsx', headers:['Tento','Leaderto'],
+    sample:[['Purasuchikku','LEAD-PU'],['Housei',''],['Kinzoku','']] },
+  catalog:{ filename:'mau_import_sanpham_tgc_giantiep.xlsx', headers:['Loai','To','MaTP','TenTP','MaNVL','TenNVL','CongDoan','TGChuan'],
+    sample:[
+      ['GianTiep','Housei','','','','','Chào lễ/朝礼',''],
+      ['GianTiep','Product Control','','','','','Sửa hàng/不良品手直し',''],
+      ['TrucTiep','Housei','02000210000','Tấm lau kính PT SP 45','','','Dập','0.25'],
+      ['TrucTiep','Housei','02000210000','Tấm lau kính PT SP 45','','','May','10.33'],
+      ['TrucTiep','Housei','90000080000','Ba ri e 1500 M8 Mini Crom-VFU019','NVL01','Vải Crom','Cắt Vải','16.00'],
+      ['TrucTiep','Housei','90000080000','Ba ri e 1500 M8 Mini Crom-VFU019','NVL02','Vải thường','Cắt Vải','14.50'],
+    ] },
+  workrecords:{ filename:'mau_import_workrecord.xlsx',
+    headers:['Ngay','MaNV','Ten','ToChinh','Loai','ToLamViec','MaTP','TenTP','MaNVL','TenNVL','CongDoan',
+      'TGChuan','SoLuong','TGBatDau','TGKetThuc','TGThaoTac','TGGiaiLao','TongTG','TGThaoTacChuan','NangSuat','GhiChu','TrangThai'],
+    sample:[
+      ['2026-09-16','38','','','TrucTiep','Purasuchikku','02001160008','','','','Đóng gói','','100','07:00','08:00','','','','','','',''],
+      ['2026-09-16','38','','','GianTiep','Purasuchikku','','','','','Duy trì môi trường','','0','08:00','08:10','','','','','','',''],
+    ] },
+};
+function downloadTemplate(type){
+  if (typeof XLSX==='undefined'){ showToast('Không tải được thư viện Excel (cần internet cho lần đầu).', true); return; }
+  const t = TEMPLATES[type];
+  const ws = XLSX.utils.aoa_to_sheet([t.headers, ...t.sample]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Mau');
+  XLSX.writeFile(wb, t.filename);
+}
+
+/* Thêm thủ công 1 dòng cho từng loại Master Data (BR-220 cập nhật — Admin có quyền thêm thủ công tất cả các tab).
+   Khác Import (ghi đè toàn bộ): thêm thủ công chỉ APPEND 1 dòng, có kiểm tra trùng khóa chính để tránh dữ liệu đôi. */
+/* ---------------- Bulk Import Work Record (Team/Tổ tab) ----------------
+   Khác Master Data import: đây là import DỮ LIỆU GIAO DỊCH (Work Record), không ghi đè — chỉ THÊM,
+   và mỗi dòng phải qua đúng validation như submitEntry() (quyền Tổ, overlap, Break, Standard Time...). */
+function excelCellToDateStr(v){
+  if (v instanceof Date) return v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
+  const s = String(v==null?'':v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return s;
+}
+function excelCellToHHMM(v){
+  if (v instanceof Date) return String(v.getHours()).padStart(2,'0')+':'+String(v.getMinutes()).padStart(2,'0');
+  if (typeof v==='number' && v>=0 && v<1){
+    const totalMin = Math.round(v*24*60);
+    return String(Math.floor(totalMin/60)).padStart(2,'0')+':'+String(totalMin%60).padStart(2,'0');
+  }
+  return String(v==null?'':v).trim();
+}
+function validateWorkRecordRows(rows){
+  const u = currentUser();
+  const scope = u.role==='Admin' ? null : teamLedBy(u.maNV);
+  const batchByPerson = {};
+  return rows.map((row)=>{
+    const errors = [];
+    const maNV = String(row.MaNV||'').trim();
+    const emp = DB.employees.find(e=>e.maNV===maNV);
+    if (!emp) errors.push('Mã NV không tồn tại');
+    const dateStr = excelCellToDateStr(row.Ngay);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) errors.push('Ngày không hợp lệ (cần yyyy-mm-dd)');
+    const workingTeam = String(row.ToLamViec||'').trim();
+    if (!DB.teams.some(t=>t.name===workingTeam)) errors.push('Tổ không tồn tại');
+    if (emp && workingTeam && !getPermittedTeams(maNV).includes(workingTeam)) errors.push('Nhân viên không có quyền làm ở Tổ này');
+    if (scope && workingTeam && workingTeam!==scope) errors.push('Ngoài phạm vi Tổ bạn quản lý');
+    const loaiRaw = String(row.Loai||'').trim();
+    const workType = loaiRaw==='GianTiep' ? 'Indirect' : (loaiRaw==='TrucTiep' ? 'Direct' : null);
+    if (!workType) errors.push('Loai phải là TrucTiep hoặc GianTiep');
+    const maTP = String(row.MaTP||'').trim();
+    const maNVL = String(row.MaNVL||'').trim();
+    const congDoan = String(row.CongDoan||'').trim();
+    const sl = Number(row.SoLuong)||0;
+    if (workType==='Direct'){
+      if (!maTP) errors.push('Thiếu MaTP');
+      if (!congDoan) errors.push('Thiếu CongDoan');
+      if (!Number.isInteger(sl) || sl<0) errors.push('SoLuong phải là số nguyên ≥ 0');
+    } else if (workType==='Indirect' && !congDoan){
+      errors.push('Thiếu CongDoan (tên việc gián tiếp)');
+    }
+    const startStr = excelCellToHHMM(row.TGBatDau), endStr = excelCellToHHMM(row.TGKetThuc);
+    let startMin=null, endMin=null;
+    if (/^\d{1,2}:\d{2}$/.test(startStr)) startMin = hhmmToMin(startStr.length===4?'0'+startStr:startStr); else errors.push('Giờ bắt đầu không hợp lệ (cần HH:MM)');
+    if (/^\d{1,2}:\d{2}$/.test(endStr)) endMin = hhmmToMin(endStr.length===4?'0'+endStr:endStr); else errors.push('Giờ kết thúc không hợp lệ (cần HH:MM)');
+
+    let times=null, thoiGianChuan=0, needsStandardTime=false, overwriteId=null;
+    if (errors.length===0){
+      times = computeTimes(startMin, endMin);
+      if (times.insideBreak) errors.push('Nằm hoàn toàn trong giờ Break');
+      if (times.actualTime<=0) errors.push('Actual Time = 0');
+      if (times.totalTime > 960) errors.push('Tổng thời gian quá dài (>16h) — có thể sai Giờ bắt đầu/Kết thúc');
+      if (workType==='Direct' && errors.length===0){
+        const resolved = resolveStandardTime(maTP, workingTeam, congDoan, maNVL);
+        if (resolved===null){ thoiGianChuan = 0; needsStandardTime = true; } // BR mới: khong chan import, luu tam =0, gan co canh bao
+        else thoiGianChuan = resolved;
+      }
+      if (errors.length===0){
+        // Trung khop CHINH XAC (maNV+Ngay+Loai+MaTP+CongDoan+Bat dau+Ket thuc) -> coi la CAP NHAT (ghi de), khong bao loi Trung gio.
+        const congDoanVal = congDoan;
+        const existing = DB.workRecords.find(r=> r.maNV===maNV && r.date===dateStr && r.workType===workType
+          && (r.maTP||'')===maTP && (r.workType==='Direct'?(r.congDoan||''):(r.indirectType||''))===congDoanVal
+          && r.start===startMin && r.end===endMin);
+        if (existing){
+          overwriteId = existing.id;
+        } else {
+          const dbOverlap = overlapsExisting(maNV, dateStr, startMin, endMin, null);
+          const key = maNV+'|'+dateStr;
+          const batchList = batchByPerson[key]||[];
+          const bEnd = endMin<=startMin?endMin+1440:endMin;
+          const batchOverlap = batchList.some(x=> startMin < x.end && x.start < bEnd);
+          if (dbOverlap || batchOverlap) errors.push('Trùng giờ với Work Record khác');
+          else (batchByPerson[key]=batchList).push({start:startMin,end:bEnd});
+        }
+      }
+    }
+    return { maNV, ten: emp?emp.ten:'', dateStr, workingTeam, workType, maTP, maNVL, congDoan, sl, startMin, endMin, times, thoiGianChuan,
+      needsStandardTime, overwriteId, note: String(row.GhiChu||'').trim(), errors };
+  });
+}
+function parseWorkRecordImport(){
+  const input = document.getElementById('importFileWR');
+  if (!input || !input.files.length){ showToast('Chọn file trước.', true); return; }
+  if (typeof XLSX==='undefined'){ showToast('Không tải được thư viện Excel (cần internet cho lần đầu).', true); return; }
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    const wb = XLSX.read(e.target.result, {type:'binary'});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rawRows = XLSX.utils.sheet_to_json(ws, {defval:''});
+    const validated = validateWorkRecordRows(rawRows);
+    showWorkRecordPreviewModal(validated);
+  };
+  reader.readAsBinaryString(file);
+}
+function showWorkRecordPreviewModal(validated){
+  const ok = validated.filter(v=>v.errors.length===0);
+  const err = validated.filter(v=>v.errors.length>0);
+  const newCount = ok.filter(v=>!v.overwriteId).length;
+  const updateCount = ok.filter(v=>v.overwriteId).length;
+  const needsTGCCount = ok.filter(v=>v.needsStandardTime).length;
+  window._wrImportValidated = validated;
+  openModal(`
+    <h3>Xem trước Import Work Record — ${validated.length} dòng</h3>
+    <div class="banner">${newCount} dòng mới sẽ được thêm, ${updateCount} dòng trùng sẽ được <b>cập nhật (ghi đè)</b> — tất cả về trạng thái <b>Chờ duyệt</b>. ${err.length} dòng lỗi sẽ bị <b>bỏ qua</b>, không import.
+      ${needsTGCCount? `<br>⚠️ <b>${needsTGCCount} dòng chưa có Thời gian chuẩn</b> — vẫn import được (TGC tạm =0), hệ thống sẽ tự cập nhật lại khi Admin bổ sung định mức cho đúng Mã TP/Tổ/Công đoạn này.` : ''}</div>
+    <div class="tablewrap" style="margin-top:10px;"><table><thead><tr>
+      <th>Mã NV</th><th>Ngày</th><th>Tổ</th><th>Loại</th><th>SL</th><th>Giờ</th><th>Kết quả</th>
+    </tr></thead><tbody>
+    ${validated.map(v=>{
+      let resultCell;
+      if (v.errors.length) resultCell = '<span class="pill warn">'+esc(v.errors.join('; '))+'</span>';
+      else {
+        const parts = [`<span class="pill go">${v.overwriteId?'Cập nhật':'Thêm mới'}</span>`];
+        if (v.needsStandardTime) parts.push('<span class="pill amber">Thiếu TGC</span>');
+        resultCell = parts.join(' ');
+      }
+      return `<tr>
+      <td>${esc(v.maNV)}</td><td>${esc(v.dateStr)}</td><td>${esc(v.workingTeam)}</td>
+      <td>${v.workType==='Direct'?'Trực tiếp':v.workType==='Indirect'?'Gián tiếp':'—'}</td><td>${v.sl}</td>
+      <td>${v.startMin!==null?minToHHMM(v.startMin):'?'}–${v.endMin!==null?minToHHMM(v.endMin):'?'}</td>
+      <td>${resultCell}</td>
+    </tr>`;
+    }).join('')}
+    </tbody></table></div>
+    ${ok.length? `<div class="field" style="margin-top:10px;"><label>Gõ XÁC NHẬN để import ${ok.length} dòng hợp lệ</label><input type="text" id="wrImportConfirmText" placeholder="Gõ XÁC NHẬN"></div>` : ''}
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Đóng</button>
+      ${ok.length? '<button class="btn btn-danger" id="confirmWRImport">Import dòng hợp lệ</button>' : ''}
+    </div>`);
+  if (ok.length){
+    document.getElementById('confirmWRImport').addEventListener('click', ()=>{
+      if (document.getElementById('wrImportConfirmText').value.trim()!=='XÁC NHẬN'){ showToast('Chưa gõ đúng "XÁC NHẬN".', true); return; }
+      commitWorkRecordImport();
+    });
+  }
+}
+function commitWorkRecordImport(){
+  const validated = window._wrImportValidated || [];
+  const ok = validated.filter(v=>v.errors.length===0);
+  const u = currentUser();
+  let createdCount=0, updatedCount=0, needsTGCCount=0;
+  ok.forEach(v=>{
+    if (v.needsStandardTime) needsTGCCount++;
+    const fields = {
+      maNV:v.maNV, ten:v.ten, workingTeam:v.workingTeam, date:v.dateStr, workType:v.workType,
+      maTP: v.workType==='Direct'?v.maTP:null, congDoan: v.workType==='Direct'?v.congDoan:null,
+      maNVL: v.workType==='Direct'?(v.maNVL||null):null,
+      indirectType: v.workType==='Indirect'?v.congDoan:null,
+      thoiGianChuan: v.workType==='Direct'?v.thoiGianChuan:0, quantity: v.workType==='Direct'?v.sl:0,
+      start:v.startMin, end:v.endMin, totalTime:v.times.totalTime, breakTime:v.times.breakTime, actualTime:v.times.actualTime, otMinutes:v.times.otMinutes,
+      note: v.note||'', needsStandardTime: !!v.needsStandardTime,
+    };
+    if (v.overwriteId){
+      const rec = DB.workRecords.find(r=>r.id===v.overwriteId);
+      if (rec){
+        const before = JSON.stringify(rec);
+        Object.assign(rec, fields, {status:'Pending', rejectReason:null});
+        addAudit(rec.id, u.maNV, 'Cập nhật qua Import (ghi đè bản ghi trùng)', before, JSON.stringify(rec));
+        updatedCount++;
+      }
+    } else {
+      DB.workRecords.push(Object.assign({id: uid(), createdAt: Date.now(), status:'Pending'}, fields));
+      createdCount++;
+    }
+  });
+  saveDB(); closeModal();
+  let msg = `Đã import: ${createdCount} mới${updatedCount?`, ${updatedCount} cập nhật (ghi đè)`:''}.`;
+  if (needsTGCCount) msg += ` ⚠️ ${needsTGCCount} dòng chưa có Thời gian chuẩn (tạm =0) — sẽ tự cập nhật khi Admin bổ sung định mức.`;
+  showToast(msg);
+  window._wrImportValidated=null; render();
+}
+
+/* Thêm thủ công 1 dòng cho từng loại Master Data (BR-220 cập nhật — Admin có quyền thêm thủ công tất cả các tab).
+   Khác Import (ghi đè toàn bộ): thêm thủ công chỉ APPEND 1 dòng, có kiểm tra trùng khóa chính để tránh dữ liệu đôi. */
+/* Sau khi Admin bổ sung/sửa Thời gian chuẩn trong workCatalog, tự động quét lại toàn bộ Work Record
+   đang bị đánh dấu needsStandardTime (do Import trước đó bỏ qua lỗi thiếu TGC) và điền lại đúng TGC
+   nếu giờ đã tra được — kèm Audit Log. Trả về số bản ghi vừa được cập nhật bù. */
+function autoFillPendingStandardTimes(){
+  const u = currentUser();
+  let count = 0;
+  DB.workRecords.forEach(r=>{
+    if (r.needsStandardTime && r.workType==='Direct'){
+      const resolved = resolveStandardTime(r.maTP, r.workingTeam, r.congDoan, r.maNVL);
+      if (resolved!==null){
+        const before = JSON.stringify(r);
+        r.thoiGianChuan = resolved;
+        r.needsStandardTime = false;
+        addAudit(r.id, u.maNV, 'Tự động cập nhật TG chuẩn (đã bổ sung định mức)', before, JSON.stringify(r));
+        count++;
+      }
+    }
+  });
+  return count;
+}
+function manualAdd(type){
+  const val = id => (document.getElementById(id)?.value || '').trim();
+  if (type==='employees'){
+    const maNV = val('addEmpMNV');
+    if (!maNV){ showToast('Nhập Mã NV.', true); return; }
+    if (DB.employees.some(e=>e.maNV===maNV)){ showToast('Mã NV đã tồn tại.', true); return; }
+    const pw = val('addEmpPw') || maNV;
+    const homeTeam = document.getElementById('addEmpTo').value;
+    (async()=>{
+      const newEmp = {maNV, ten:val('addEmpTen'), employeeTeam:homeTeam, role:document.getElementById('addEmpRole').value,
+        active:document.getElementById('addEmpTrangthai').value==='Active', passwordHash: await sha256(pw)};
+      const apiResult = await apiCall('addEmployee', { session: currentSession, employee: newEmp });
+      if (apiResult){
+        if (!apiResult.ok){ showToast(apiResult.error||'Thêm nhân viên thất bại.', true); return; }
+        DB.employees = apiResult.employees; saveDB(); showToast('Đã thêm nhân viên (đồng bộ dùng chung).'); render(); return;
+      }
+      DB.employees.push(newEmp); // fallback cuc bo neu chua co API dung chung
+      saveDB(); showToast('Đã thêm nhân viên.'); render();
+    })();
+    return;
+  }
+  if (type==='teams'){
+    const name = val('addTeamTento');
+    if (!name){ showToast('Nhập Tên Tổ.', true); return; }
+    if (DB.teams.some(t=>t.name===name)){ showToast('Tên Tổ đã tồn tại.', true); return; }
+    const newTeam = {name, leaderMaNV: val('addTeamLeaderto')};
+    (async()=>{
+      const apiResult = await apiCall('addTeam', { session: currentSession, team: newTeam });
+      if (apiResult){
+        if (!apiResult.ok){ showToast(apiResult.error||'Thêm Tổ thất bại.', true); return; }
+        DB.teams = apiResult.teams; saveDB(); showToast('Đã thêm Team (đồng bộ dùng chung).'); render(); return;
+      }
+      DB.teams.push(newTeam); // fallback cuc bo neu chua co API dung chung
+      saveDB(); showToast('Đã thêm Team.'); render();
+    })();
+    return;
+  }
+  if (type==='catalog'){
+    const loai = document.getElementById('addCatLoai').value; // 'Direct' | 'Indirect'
+    const to = document.getElementById('addCatTo').value;
+    const congDoan = val('addCatCongDoan');
+    if (!to || !congDoan){ showToast('Nhập đủ Tổ và Công đoạn.', true); return; }
+    const maTP = loai==='Direct' ? val('addCatMaTP') : '';
+    const tenTP = loai==='Direct' ? val('addCatTenTP') : '';
+    const maNVL = loai==='Direct' ? val('addCatMaNVL') : '';
+    const tenNVL = loai==='Direct' ? val('addCatTenNVL') : '';
+    const tg = loai==='Direct' ? Number(val('addCatTGChuan'))||0 : 0;
+    if (loai==='Direct' && !maTP){ showToast('Trực tiếp cần nhập Mã TP.', true); return; }
+    const dup = DB.workCatalog.some(c=> c.workType===loai && c.workingTeam===to && (c.maTP||'')===maTP && (c.maNVL||'')===maNVL && c.congDoan===congDoan);
+    if (dup){ showToast('Dòng này đã tồn tại (trùng khoá Loại+Tổ+Mã TP+Mã NVL+Công đoạn).', true); return; }
+    DB.workCatalog.push({workType:loai, workingTeam:to, maTP, tenTP, maNVL, tenNVL, congDoan, thoiGianChuan:tg});
+    const filled = autoFillPendingStandardTimes();
+    saveDB(); showToast('Đã thêm.' + (filled? ` Đã tự động cập nhật TG chuẩn cho ${filled} Work Record đang chờ.` : '')); render(); return;
+  }
+}
+
+/* Sửa thủ công 1 Nhân viên — mở modal, cho phép đổi Tên/Tổ chính/Role/Trạng thái/Mật khẩu. */
+function editEmployee(maNV){
+  const e = DB.employees.find(x=>x.maNV===maNV);
+  if (!e) return;
+  const teamOpts = DB.teams.map(t=>`<option value="${esc(t.name)}" ${t.name===e.employeeTeam?'selected':''}>${esc(t.name)}</option>`).join('');
+  openModal(`<h3>Sửa Nhân viên — ${esc(maNV)}</h3>
+    <div class="field"><label>Tên</label><input type="text" id="editEmpTen" value="${esc(e.ten)}"></div>
+    <div class="row2">
+      <div class="field"><label>Tổ (chính)</label><select id="editEmpTo">${teamOpts}</select></div>
+      <div class="field"><label>Role</label><select id="editEmpRole">
+        <option value="Employee" ${e.role==='Employee'?'selected':''}>Employee</option>
+        <option value="Leader" ${e.role==='Leader'?'selected':''}>Leader</option>
+        <option value="Admin" ${e.role==='Admin'?'selected':''}>Admin</option></select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Trạng thái</label><select id="editEmpTrangthai">
+        <option value="Active" ${e.active?'selected':''}>Active</option>
+        <option value="Inactive" ${!e.active?'selected':''}>Inactive</option></select></div>
+      <div class="field"><label>Mật khẩu mới (để trống = giữ nguyên)</label><input type="text" id="editEmpPw"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-primary" id="confirmEditEmp">Lưu thay đổi</button>
+    </div>`);
+  document.getElementById('confirmEditEmp').addEventListener('click', async ()=>{
+    const homeTeam = document.getElementById('editEmpTo').value;
+    const newRole = document.getElementById('editEmpRole').value;
+    const newActive = document.getElementById('editEmpTrangthai').value==='Active';
+    if (e.role==='Admin' && (newRole!=='Admin' || !newActive)){
+      const otherActiveAdmins = DB.employees.filter(x=>x.maNV!==maNV && x.role==='Admin' && x.active).length;
+      if (otherActiveAdmins===0){
+        showToast('Đây là tài khoản Admin đang hoạt động duy nhất — không thể hạ quyền hoặc khoá, sẽ khiến không ai truy cập được Quản trị.', true);
+        return;
+      }
+    }
+    const newPw = document.getElementById('editEmpPw').value.trim();
+    const changes = { ten: document.getElementById('editEmpTen').value.trim(), employeeTeam: homeTeam, role: newRole, active: newActive };
+    if (newPw) changes.passwordHash = await sha256(newPw);
+    const apiResult = await apiCall('editEmployee', { session: currentSession, maNV, changes });
+    if (apiResult){
+      if (!apiResult.ok){ showToast(apiResult.error||'Sửa thất bại.', true); return; }
+      DB.employees = apiResult.employees; saveDB(); closeModal(); showToast('Đã lưu thay đổi (đồng bộ dùng chung).'); render();
+      return;
+    }
+    // fallback cuc bo neu chua co API dung chung
+    Object.assign(e, changes);
+    saveDB(); closeModal(); showToast('Đã lưu thay đổi.'); render();
+  });
+}
+
+/* Xoá 1 Nhân viên — chặn xoá tài khoản Role=Admin. Xoá vĩnh viễn kèm quyền Working Team phụ của người đó. */
+function deleteEmployee(maNV){
+  const e = DB.employees.find(x=>x.maNV===maNV);
+  if (!e) return;
+  if (e.role==='Admin'){ showToast('Không được xoá tài khoản Admin.', true); return; }
+  openModal(`<h3>Xoá Nhân viên — ${esc(maNV)}</h3>
+    <div class="readout">${esc(e.ten)} · Tổ: ${esc(e.employeeTeam)||'—'} · Role: ${e.role}</div>
+    <div class="banner">Xoá vĩnh viễn, không khôi phục được. Gõ <b>XOA</b> để xác nhận.</div>
+    <div class="field" style="margin-top:10px;"><input type="text" id="deleteEmpConfirmText" placeholder="Gõ XOA"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-danger" id="confirmDeleteEmp">Xoá vĩnh viễn</button>
+    </div>`);
+  document.getElementById('confirmDeleteEmp').addEventListener('click', async ()=>{
+    if (document.getElementById('deleteEmpConfirmText').value.trim()!=='XOA'){ showToast('Chưa gõ đúng "XOA".', true); return; }
+    const apiResult = await apiCall('deleteEmployee', { session: currentSession, maNV });
+    if (apiResult){
+      if (!apiResult.ok){ showToast(apiResult.error||'Xoá thất bại.', true); return; }
+      DB.employees = apiResult.employees;
+      const ledTeams = DB.teams.filter(t=>t.leaderMaNV===maNV);
+      ledTeams.forEach(t=> t.leaderMaNV='');
+      saveDB(); closeModal();
+      showToast(ledTeams.length? `Đã xoá nhân viên (đồng bộ dùng chung). ${ledTeams.length} Tổ (${ledTeams.map(t=>t.name).join(', ')}) hiện chưa có Leader.` : 'Đã xoá nhân viên (đồng bộ dùng chung).');
+      render();
+      return;
+    }
+    // fallback cuc bo neu chua co API dung chung
+    DB.employees = DB.employees.filter(x=>x.maNV!==maNV);
+    DB.workingTeamPermissions = DB.workingTeamPermissions.filter(p=>p.maNV!==maNV);
+    const ledTeams = DB.teams.filter(t=>t.leaderMaNV===maNV);
+    ledTeams.forEach(t=> t.leaderMaNV='');
+    saveDB(); closeModal();
+    showToast(ledTeams.length? `Đã xoá nhân viên. ${ledTeams.length} Tổ (${ledTeams.map(t=>t.name).join(', ')}) hiện chưa có Leader.` : 'Đã xoá nhân viên.');
+    render();
+  });
+}
+
+
+/* Sửa thủ công 1 Team — Tên Tổ là khóa chính (BR đã chốt), nên đổi tên phải cascade sang mọi chỗ
+   đang lưu tên Tổ dưới dạng chuỗi: Employee.employeeTeam, workingTeamPermissions, Product.workingTeam,
+   StandardTime.workingTeam, IndirectWorkTypes.workingTeam, và WorkRecord.workingTeam (kể cả lịch sử). */
+function editTeam(oldName){
+  const t = DB.teams.find(x=>x.name===oldName);
+  if (!t) return;
+  openModal(`<h3>Sửa Team — ${esc(oldName)}</h3>
+    <div class="field"><label>Tên Tổ</label><input type="text" id="editTeamTento" value="${esc(t.name)}"></div>
+    <div class="field"><label>Leader (Mã NV)</label><input type="text" id="editTeamLeaderto" value="${esc(t.leaderMaNV)}"></div>
+    <div class="banner">Đổi Tên Tổ sẽ cập nhật lại tên này ở TOÀN BỘ dữ liệu liên quan (Nhân viên, Sản phẩm, Thời gian chuẩn, Việc gián tiếp, Quyền Working Team, và cả Work Record đã có).</div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-primary" id="confirmEditTeam">Lưu thay đổi</button>
+    </div>`);
+  document.getElementById('confirmEditTeam').addEventListener('click', async ()=>{
+    const newName = document.getElementById('editTeamTento').value.trim();
+    const newLeader = document.getElementById('editTeamLeaderto').value.trim();
+    if (!newName){ showToast('Tên Tổ không được để trống.', true); return; }
+    if (newName!==oldName && DB.teams.some(x=>x.name!==oldName && x.name===newName)){ showToast('Tên Tổ mới đã tồn tại.', true); return; }
+    const apiResult = await apiCall('editTeam', { session: currentSession, oldName, changes: { name:newName, leaderMaNV:newLeader } });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Sửa Tổ thất bại.', true); return; }
+    if (apiResult && apiResult.ok) DB.teams = apiResult.teams;
+    else { t.name = newName; t.leaderMaNV = newLeader; } // fallback cuc bo neu chua co API dung chung
+    if (newName!==oldName){
+      // Cascade sang du lieu VAN CON cuc bo trong Giai doan 1 (Catalog/Work Record) - lam o ca 2 truong hop API/local.
+      if (!apiResult) DB.employees.forEach(e=>{ if (e.employeeTeam===oldName) e.employeeTeam=newName; }); // API da tu cascade Employees roi
+      DB.workingTeamPermissions.forEach(p=>{ if (p.workingTeam===oldName) p.workingTeam=newName; });
+      DB.workCatalog.forEach(c=>{ if (c.workingTeam===oldName) c.workingTeam=newName; });
+      DB.workRecords.forEach(r=>{ if (r.workingTeam===oldName) r.workingTeam=newName; });
+    }
+    saveDB(); closeModal(); showToast(apiResult&&apiResult.ok ? 'Đã lưu thay đổi (đồng bộ dùng chung).' : 'Đã lưu thay đổi.'); render();
+  });
+}
+
+/* Danh sách bảng gộp workCatalog — có tìm kiếm, lọc Tổ/Loại, sắp xếp, phân trang (BR UI-040b: cần khi dữ liệu lớn, đã áp dụng). */
+function renderCatalogList(){
+  let rows = DB.workCatalog.slice();
+  const totalAll = rows.length;
+
+  if (catalogFilterTo) rows = rows.filter(c=>c.workingTeam===catalogFilterTo);
+  if (catalogFilterLoai) rows = rows.filter(c=>c.workType===catalogFilterLoai);
+  if (catalogSearch){
+    const q = catalogSearch.toLowerCase();
+    rows = rows.filter(c=> (c.maTP||'').toLowerCase().includes(q) || (c.tenTP||'').toLowerCase().includes(q)
+      || (c.congDoan||'').toLowerCase().includes(q) || (c.maNVL||'').toLowerCase().includes(q) || (c.tenNVL||'').toLowerCase().includes(q));
+  }
+
+  rows.sort((a,b)=>{
+    const k = catalogSort.key;
+    let av = a[k]||'', bv = b[k]||'';
+    if (k==='thoiGianChuan') return catalogSort.dir*((av||0)-(bv||0));
+    return catalogSort.dir*String(av).localeCompare(String(bv));
+  });
+
+  const totalFiltered = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered/catalogPageSize));
+  if (catalogPage > totalPages) catalogPage = totalPages;
+  if (catalogPage < 1) catalogPage = 1;
+  const startIdx = (catalogPage-1)*catalogPageSize;
+  const pageRows = rows.slice(startIdx, startIdx+catalogPageSize);
+
+  const teamOpts = DB.teams.map(t=>`<option value="${esc(t.name)}" ${catalogFilterTo===t.name?'selected':''}>${esc(t.name)}</option>`).join('');
+  const th = (key,label)=> `<th data-action="catalogSort" data-val="${key}" class="${catalogSort.key===key?'sorted':''}">${label} ${catalogSort.key===key?(catalogSort.dir>0?'▲':'▼'):''}</th>`;
+
+  return `
+    <div class="toolbar">
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+        <input type="text" id="catalogSearchInput" placeholder="Tìm Mã TP / Tên TP / Công đoạn / NVL" value="${esc(catalogSearch)}">
+      </div>
+      <select id="catalogFilterToSelect"><option value="">Tất cả Tổ</option>${teamOpts}</select>
+      <select id="catalogFilterLoaiSelect">
+        <option value="">Tất cả loại</option>
+        <option value="Direct" ${catalogFilterLoai==='Direct'?'selected':''}>Trực tiếp</option>
+        <option value="Indirect" ${catalogFilterLoai==='Indirect'?'selected':''}>Gián tiếp</option>
+      </select>
+    </div>
+    <div class="hint" style="margin-bottom:10px;">${totalFiltered} / ${totalAll} dòng ${(catalogSearch||catalogFilterTo||catalogFilterLoai)?'(đã lọc)':''}</div>
+    <div class="tablewrap"><table><thead><tr>
+      ${th('workType','Loại')}${th('workingTeam','Tổ')}${th('maTP','Mã TP')}${th('tenTP','Tên TP')}${th('maNVL','Mã NVL')}${th('tenNVL','Tên NVL')}${th('congDoan','Công đoạn')}${th('thoiGianChuan','TGC')}
+    </tr></thead>
+    <tbody>${pageRows.map(c=>`<tr>
+      <td>${workTypeBadge(c.workType)}</td><td>${esc(c.workingTeam)}</td>
+      <td>${esc(c.maTP)}</td><td>${esc(c.tenTP)}</td><td>${esc(c.maNVL)}</td><td>${esc(c.tenNVL)}</td>
+      <td>${esc(c.congDoan)}</td><td>${c.workType==='Direct'?fmt3(c.thoiGianChuan):'—'}</td>
+    </tr>`).join('')}</tbody></table></div>
+    ${totalFiltered===0?'<div class="empty">Chưa có dữ liệu</div>':''}
+    <div class="toolbar" style="margin-top:12px;justify-content:space-between;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label style="margin:0;font-size:13px;">Số dòng/trang:</label>
+        <select id="catalogPageSizeSelect">
+          <option value="50" ${catalogPageSize===50?'selected':''}>50</option>
+          <option value="100" ${catalogPageSize===100?'selected':''}>100</option>
+          <option value="200" ${catalogPageSize===200?'selected':''}>200</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-outline btn-sm" data-action="catalogPrevPage" ${catalogPage<=1?'disabled':''}>← Trước</button>
+        <span style="font-size:13px;color:var(--ink-soft);">Trang ${catalogPage}/${totalPages}</span>
+        <button class="btn btn-outline btn-sm" data-action="catalogNextPage" ${catalogPage>=totalPages?'disabled':''}>Sau →</button>
+      </div>
+    </div>`;
+}
+
+function viewAdminImport(tab){
+  if (tab==='catalog'){
+    const teamOpts = DB.teams.map(t=>`<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('');
+    return `
+    <div class="card">
+      <div class="section-title">Import Sản phẩm / Thời gian chuẩn / Việc gián tiếp (1 bảng gộp)</div>
+      <div class="hint">Cột yêu cầu: Loai (TrucTiep/GianTiep) | To | MaTP | TenTP | MaNVL | TenNVL | CongDoan | TGChuan.
+        Với Gián tiếp: để trống MaTP/TenTP/MaNVL/TenNVL/TGChuan, chỉ cần To + CongDoan.
+        Mã NVL để trống nếu Công đoạn đó không cần phân biệt theo nguyên vật liệu — nếu có nhiều dòng cùng MaTP+Tổ+CongDoan nhưng khác MaNVL, khi nhập liệu nhân viên sẽ phải chọn đúng NVL.
+        Khoá dữ liệu: Loai + Tổ + MaTP + MaNVL + Công đoạn. Import này <b>ghi đè toàn bộ</b> bảng, không còn theo dõi lịch sử ngày hiệu lực.</div>
+      <button class="btn btn-outline btn-sm" style="margin-top:8px;" data-action="downloadTemplate" data-val="catalog">Tải file mẫu (.xlsx)</button>
+      <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="margin-top:10px;">
+      <button class="btn btn-primary" style="margin-top:10px;" data-action="parseImport" data-val="catalog">Xem trước dữ liệu</button>
+    </div>
+    <div class="card">
+      <div class="section-title">+ Thêm thủ công</div>
+      <div class="row2">
+        <div class="field"><label>Trực tiếp hoặc Gián tiếp</label>
+          <select id="addCatLoai"><option value="Direct">Trực tiếp</option><option value="Indirect">Gián tiếp</option></select></div>
+        <div class="field"><label>Tổ</label><select id="addCatTo"><option value="">—</option>${teamOpts}</select></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Mã TP <span class="hint" style="display:inline;margin:0;">(bỏ trống nếu Gián tiếp)</span></label><input type="text" id="addCatMaTP"></div>
+        <div class="field"><label>Tên TP</label><input type="text" id="addCatTenTP"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Mã NVL <span class="hint" style="display:inline;margin:0;">(tuỳ chọn)</span></label><input type="text" id="addCatMaNVL"></div>
+        <div class="field"><label>Tên NVL</label><input type="text" id="addCatTenNVL"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Công đoạn</label><input type="text" id="addCatCongDoan"></div>
+        <div class="field"><label>Thời gian chuẩn (phút/SP) <span class="hint" style="display:inline;margin:0;">(bỏ trống nếu Gián tiếp)</span></label><input type="number" step="0.001" id="addCatTGChuan"></div>
+      </div>
+      <button class="btn btn-primary" data-action="manualAdd" data-val="catalog">Thêm</button>
+    </div>
+    <div class="card"><div class="section-title">Danh sách hiện có</div>
+      ${renderCatalogList()}
+    </div>`;
+  }
+  if (tab==='employees'){
+    const teamOpts = DB.teams.map(t=>`<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('');
+    return `
+    <div class="card">
+      <div class="section-title">Import Nhân viên</div>
+      <div class="hint">Cột yêu cầu: MNV | Tên | Tổ | Role (Employee/Leader/Admin) | Trangthai (Active/Inactive). Import sẽ ghi đè toàn bộ danh sách nhân viên; mật khẩu giữ nguyên nếu MNV đã tồn tại, mặc định = MNV nếu là nhân viên mới. Nhân viên được chọn tự do bất kỳ Tổ nào khi nhập liệu, không cần cấp quyền riêng.</div>
+      <button class="btn btn-outline btn-sm" style="margin-top:8px;" data-action="downloadTemplate" data-val="employees">Tải file mẫu (.xlsx)</button>
+      <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="margin-top:10px;">
+      <button class="btn btn-primary" style="margin-top:10px;" data-action="parseImport" data-val="employees">Xem trước dữ liệu</button>
+    </div>
+    <div class="card">
+      <div class="section-title">+ Thêm thủ công</div>
+      <div class="row2">
+        <div class="field"><label>Mã NV</label><input type="text" id="addEmpMNV"></div>
+        <div class="field"><label>Tên</label><input type="text" id="addEmpTen"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Tổ (chính)</label><select id="addEmpTo"><option value="">—</option>${teamOpts}</select></div>
+        <div class="field"><label>Role</label><select id="addEmpRole"><option value="Employee">Employee</option><option value="Leader">Leader</option><option value="Admin">Admin</option></select></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Trạng thái</label><select id="addEmpTrangthai"><option value="Active">Active</option><option value="Inactive">Inactive</option></select></div>
+        <div class="field"><label>Mật khẩu (để trống = Mã NV)</label><input type="text" id="addEmpPw"></div>
+      </div>
+      <button class="btn btn-primary" data-action="manualAdd" data-val="employees">Thêm</button>
+    </div>
+    <div class="card"><div class="section-title">Danh sách hiện có (${DB.employees.length})</div>
+      <div class="tablewrap"><table><thead><tr><th>Mã NV</th><th>Tên</th><th>Tổ</th><th>Role</th><th>Trạng thái</th><th></th></tr></thead>
+      <tbody>${DB.employees.map(e=>{
+        const canDelete = e.role!=='Admin';
+        return `<tr><td>${esc(e.maNV)}</td><td>${esc(e.ten)}</td><td>${esc(e.employeeTeam)}</td><td>${e.role}</td><td>${e.active?'Active':'Inactive'}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-outline btn-sm" data-action="editEmployee" data-id="${esc(e.maNV)}">Sửa</button>
+          ${canDelete? `<button class="btn btn-danger btn-sm" data-action="deleteEmployee" data-id="${esc(e.maNV)}">Xoá</button>` : ''}
+        </td></tr>`;
+      }).join('')}</tbody></table></div>
+    </div>`;
+  }
+  if (tab==='teams'){
+    return `
+    <div class="card">
+      <div class="section-title">Import Team</div>
+      <div class="hint">Cột yêu cầu: Tento | Leaderto (để trống Leaderto nếu Team chưa có Leader). Tên Tổ là khóa chính — không được trùng.</div>
+      <button class="btn btn-outline btn-sm" style="margin-top:8px;" data-action="downloadTemplate" data-val="teams">Tải file mẫu (.xlsx)</button>
+      <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="margin-top:10px;">
+      <button class="btn btn-primary" style="margin-top:10px;" data-action="parseImport" data-val="teams">Xem trước dữ liệu</button>
+    </div>
+    <div class="card">
+      <div class="section-title">+ Thêm thủ công</div>
+      <div class="row2">
+        <div class="field"><label>Tên Tổ</label><input type="text" id="addTeamTento"></div>
+        <div class="field"><label>Leader (Mã NV, để trống nếu chưa có)</label><input type="text" id="addTeamLeaderto"></div>
+      </div>
+      <button class="btn btn-primary" data-action="manualAdd" data-val="teams">Thêm</button>
+    </div>
+    <div class="card"><div class="section-title">Danh sách hiện có (${DB.teams.length})</div>
+      <div class="tablewrap"><table><thead><tr><th>Tên Tổ</th><th>Leader</th><th></th></tr></thead>
+      <tbody>${DB.teams.map(t=>`<tr><td>${esc(t.name)}</td><td>${esc(t.leaderMaNV)}</td>
+        <td><button class="btn btn-outline btn-sm" data-action="editTeam" data-id="${esc(t.name)}">Sửa</button></td></tr>`).join('')}</tbody></table></div>
+    </div>`;
+  }
+  return '';
+}
+
+function viewAdminRecords(){
+  return `
+  <div class="card">
+    <div class="section-title">Import Work Record (đưa dữ liệu vào test nhanh)</div>
+    <div class="hint">Định dạng cột <b>giống hệt file Xuất Excel</b> (22 cột) để dễ đối chiếu. Cột <b>bắt buộc điền</b>: Ngay (yyyy-mm-dd), MaNV, Loai (TrucTiep/GianTiep), ToLamViec, MaTP (Trực tiếp), MaNVL (chỉ khi có phân hoá NVL), CongDoan, SoLuong, TGBatDau (HH:MM), TGKetThuc (HH:MM), GhiChu (không bắt buộc). Các cột còn lại (Ten, ToChinh, TenTP, TenNVL, TGChuan, TGThaoTac, TGGiaiLao, TongTG, TGThaoTacChuan, NangSuat, TrangThai) <b>để trống</b> — hệ thống tự tính lại toàn bộ, không đọc giá trị anh điền vào các cột này.
+      Với Gián tiếp: để trống MaTP, CongDoan = tên việc gián tiếp, SL để trống.
+      Mỗi dòng được kiểm tra đầy đủ theo rule hiện hành (quyền Tổ, trùng giờ, Break, Thời gian chuẩn...) trước khi cho xem trước — dòng lỗi sẽ bị loại. Với Admin, không giới hạn theo Tổ. Sau import, trạng thái là <b>Chờ duyệt</b> như nhập tay bình thường.</div>
+    <button class="btn btn-outline btn-sm" style="margin-top:8px;" data-action="downloadTemplate" data-val="workrecords">Tải file mẫu (.xlsx)</button>
+    <input type="file" id="importFileWR" accept=".xlsx,.xls,.csv" style="margin-top:10px;">
+    <button class="btn btn-primary" style="margin-top:10px;" data-action="parseWorkRecordImport">Xem trước dữ liệu</button>
+  </div>
+  <div class="card">
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <span>Tất cả Work Record</span>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline btn-sm" style="width:auto;" data-action="exportAllRecords">Xuất Excel (.csv)</button>
+        <button class="btn btn-danger btn-sm" style="width:auto;" data-action="confirmClearAllRecords">🗑 Xoá sạch dữ liệu</button>
+      </div>
+    </div>
+    ${renderRecordTable(DB.workRecords, {withAdminActions:true, showToolbar:true, withMonthFilter:true, sortable:true})}
+  </div>`;
+}
+
+/* Xoá sạch toàn bộ Work Record (kể cả Audit Log liên quan) — dùng cho việc test lại từ đầu.
+   Xác nhận kép theo đúng chuẩn UI-071: phải gõ đúng "XÁC NHẬN" mới xoá được. */
+function confirmClearAllRecords(){
+  const count = DB.workRecords.length;
+  openModal(`
+    <h3>Xoá sạch dữ liệu Work Record</h3>
+    <div class="banner" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">⚠️ Sẽ xoá vĩnh viễn toàn bộ <b>${count} Work Record</b> hiện có (mọi trạng thái) và Audit Log liên quan. Không thể hoàn tác. Sản phẩm/TGC, Nhân viên, Tổ... KHÔNG bị ảnh hưởng.</div>
+    <div class="field" style="margin-top:10px;"><label>Gõ XÁC NHẬN để xoá</label><input type="text" id="clearRecordsConfirmText" placeholder="Gõ XÁC NHẬN"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Huỷ</button>
+      <button class="btn btn-danger" id="confirmClearRecordsBtn" disabled>Xoá sạch (${count})</button>
+    </div>`);
+  const input = document.getElementById('clearRecordsConfirmText');
+  const btn = document.getElementById('confirmClearRecordsBtn');
+  input.addEventListener('input', ()=>{ btn.disabled = input.value.trim()!=='XÁC NHẬN'; });
+  btn.addEventListener('click', ()=>{
+    if (input.value.trim()!=='XÁC NHẬN') return;
+    const ids = new Set(DB.workRecords.map(r=>r.id));
+    DB.workRecords = [];
+    DB.auditLogs = DB.auditLogs.filter(a=>!ids.has(a.recordId));
+    saveDB(); closeModal(); showToast(`Đã xoá sạch ${ids.size} Work Record.`); render();
+  });
+}
+
+function viewAdminAccounts(){
+  return `<div class="card"><div class="section-title">Tài khoản (${DB.employees.length})</div>
+  <div class="tablewrap"><table><thead><tr><th>Mã NV</th><th>Tên</th><th>Tổ chính</th><th>Role</th><th>Trạng thái</th><th></th></tr></thead>
+  <tbody>${DB.employees.map(e=>{
+    return `<tr>
+    <td>${esc(e.maNV)}</td><td>${esc(e.ten)}</td><td>${esc(e.employeeTeam)}</td><td>${e.role}</td><td>${e.active?'Active':'Inactive'}</td>
+    <td style="white-space:nowrap;">
+      <button class="btn btn-outline btn-sm" data-action="editEmployee" data-id="${esc(e.maNV)}">Sửa</button>
+      <button class="btn btn-outline btn-sm" data-action="resetPassword" data-id="${esc(e.maNV)}">Reset mật khẩu</button>
+    </td>
+  </tr>`;
+  }).join('')}</tbody></table></div></div>`;
+}
+
+/* ---------------- Backup (Export/Import toàn bộ DB dạng JSON — dùng để test rồi khôi phục lại nhanh) ---------------- */
+function viewAdminBackup(){
+  const counts = [
+    ['Nhân viên', DB.employees.length], ['Team', DB.teams.length], ['Quyền Working Team', DB.workingTeamPermissions.length],
+    ['Sản phẩm/TGC/Gián tiếp', DB.workCatalog.length], ['Work Record', DB.workRecords.length], ['Audit Log', DB.auditLogs.length],
+  ];
+  return `
+  <div class="card">
+    <div class="section-title">Xuất Backup</div>
+    <div class="hint">Tải toàn bộ dữ liệu hiện tại (Nhân viên, Tổ, Sản phẩm, Thời gian chuẩn, Work Record, Audit Log...) thành 1 file JSON để lưu lại — dùng khi test xong muốn khôi phục nhanh, không phải nhập lại từ đầu.</div>
+    <div class="readout" style="margin-top:10px;">${counts.map(([l,n])=>`${l}: <b>${n}</b>`).join(' &nbsp;·&nbsp; ')}</div>
+    <button class="btn btn-primary" style="margin-top:10px;" data-action="exportBackup">Tải file Backup (.json)</button>
+  </div>
+  <div class="card">
+    <div class="section-title">Khôi phục từ Backup</div>
+    <div class="hint">Chọn 1 file Backup (.json) đã tải trước đó để khôi phục lại toàn bộ dữ liệu — sẽ <b>ghi đè toàn bộ</b> dữ liệu hiện tại.</div>
+    <input type="file" id="importBackupFile" accept=".json" style="margin-top:10px;">
+    <button class="btn btn-primary" style="margin-top:10px;" data-action="parseBackupImport">Xem trước &amp; Khôi phục</button>
+  </div>`;
+}
+function exportBackup(){
+  const json = JSON.stringify(DB, null, 2);
+  const blob = new Blob([json], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'condor-backup-' + todayStr() + '.json'; a.click();
+  URL.revokeObjectURL(url);
+  showToast('Đã tải file Backup.');
+}
+function parseBackupImport(){
+  const input = document.getElementById('importBackupFile');
+  if (!input || !input.files.length){ showToast('Chọn file Backup trước.', true); return; }
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    let parsed;
+    try { parsed = JSON.parse(e.target.result); }
+    catch(err){ showToast('File Backup không hợp lệ (không đọc được JSON).', true); return; }
+    const requiredArrays = ['employees','teams','workingTeamPermissions','workCatalog','workRecords','auditLogs'];
+    if (!parsed || typeof parsed!=='object'){ showToast('File này không đúng định dạng Backup của app.', true); return; }
+    if (!Array.isArray(parsed.employees) || parsed.employees.length===0){ showToast('File Backup không có dữ liệu Nhân viên hợp lệ.', true); return; }
+    const missing = requiredArrays.filter(k=>!Array.isArray(parsed[k]));
+    requiredArrays.forEach(k=>{ if (!Array.isArray(parsed[k])) parsed[k]=[]; }); // tự bù mảng rỗng cho bảng thiếu, tránh crash sau khi khôi phục
+    window._backupPending = parsed;
+    window._backupMissing = missing;
+    showBackupPreviewModal(parsed);
+  };
+  reader.readAsText(file);
+}
+function showBackupPreviewModal(parsed){
+  const counts = ['employees','teams','workingTeamPermissions','workCatalog','workRecords','auditLogs']
+    .map(k=> `${k}: ${(parsed[k]||[]).length}`).join(' · ');
+  const missing = window._backupMissing || [];
+  openModal(`<h3>Khôi phục từ Backup</h3>
+    <div class="readout">${esc(counts)}</div>
+    ${missing.length? `<div class="banner">File Backup thiếu bảng: <b>${esc(missing.join(', '))}</b> — các bảng này sẽ được khôi phục rỗng.</div>` : ''}
+    <div class="banner">Khôi phục sẽ <b>GHI ĐÈ TOÀN BỘ</b> dữ liệu hiện tại trong app (kể cả tài khoản, mật khẩu). Gõ <b>XÁC NHẬN</b> để tiếp tục.</div>
+    <div class="field" style="margin-top:10px;"><input type="text" id="backupConfirmText" placeholder="Gõ XÁC NHẬN"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-danger" id="confirmBackupImport">Khôi phục</button>
+    </div>`);
+  document.getElementById('confirmBackupImport').addEventListener('click', ()=>{
+    if (document.getElementById('backupConfirmText').value.trim()!=='XÁC NHẬN'){ showToast('Chưa gõ đúng "XÁC NHẬN".', true); return; }
+    DB = window._backupPending;
+    saveDB();
+    closeModal();
+    window._backupPending = null;
+    window._backupMissing = null;
+    showToast('Đã khôi phục dữ liệu từ Backup.');
+    route = 'dashboard';
+    render();
+  });
+}
+
+
+function isRouteAllowed(routeKey, role){
+  if (routeKey==='admin') return role==='Admin';
+  if (routeKey==='approve' || routeKey==='teamdash') return role==='Leader' || role==='Admin';
+  return true; // dashboard, entry, history: mọi role đã đăng nhập đều được vào
+}
+function render(){
+  const app = document.getElementById('app');
+  if (!currentSession || !currentUser()){ app.innerHTML = viewLogin(); attachLoginEvents(); return; }
+  touchSession();
+  const u = currentUser();
+  if (!isRouteAllowed(route, u.role)){ route='dashboard'; showToast('Bạn không có quyền truy cập mục này.', true); }
+  let html;
+  switch(route){
+    case 'entry': html = viewEntry(); break;
+    case 'history': html = viewHistory(); break;
+    case 'approve': html = viewApprove(); break;
+    case 'teamdash': html = viewTeamDash(); break;
+    case 'admin': html = viewAdmin(); break;
+    default: html = viewDashboard();
+  }
+  app.innerHTML = html;
+  attachShellEvents();
+}
+
+/* ---------------- Event wiring ---------------- */
+function attachLoginEvents(){
+  document.getElementById('btnLogin').addEventListener('click', async ()=>{
+    const maNV = document.getElementById('loginMaNV').value.trim();
+    const pw = document.getElementById('loginPw').value;
+    const remember = document.getElementById('loginRemember').checked;
+    const errBox = document.getElementById('loginErr');
+    let hash;
+    try { hash = await sha256(pw); }
+    catch(err){
+      errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Không thể mã hoá mật khẩu (Web Crypto API không khả dụng trong ngữ cảnh hiện tại — thử mở file này qua trình duyệt Chrome/Edge/Firefox bản mới, tránh trình duyệt trong app khác).</div>';
+      return;
+    }
+    // Thu dang nhap qua API dung chung (Google Sheets) truoc — neu API_URL chua cau hinh hoac loi mang, apiCall tra ve null.
+    const apiResult = await apiCall('login', { maNV, passwordHash: hash });
+    if (apiResult){
+      if (!apiResult.ok){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${esc(apiResult.error||'Đăng nhập thất bại.')}</div>`; return; }
+      await syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash });
+      login(maNV, remember, hash);
+      route = 'dashboard'; render();
+      return;
+    }
+    // Fallback: che do cuc bo (chua deploy API dung chung, hoac API dang loi) - giu dung hanh vi cu, khong doi trai nghiem.
+    const emp = DB.employees.find(e=>e.maNV===maNV && e.active);
+    if (!emp){ errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Mã nhân viên không tồn tại hoặc đã bị khóa.</div>'; return; }
+    if (hash !== emp.passwordHash){ errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Sai mật khẩu.</div>'; return; }
+    login(maNV, remember, hash);
+    route = 'dashboard';
+    render();
+  });
+  const resetLink = document.getElementById('resetToDefault');
+  if (resetLink) resetLink.addEventListener('click', (ev)=>{
+    ev.preventDefault();
+    if (!confirm('Xoá toàn bộ dữ liệu hiện tại trên trình duyệt này và đặt lại về mặc định (chỉ còn tài khoản Admin/Admin)? Không thể hoàn tác — nếu cần giữ lại, hãy Xuất Backup trước.')) return;
+    localStorage.removeItem(CONDOR_DB_KEY);
+    localStorage.removeItem(CONDOR_SESSION_KEY);
+    location.reload();
+  });
+}
+
+function attachShellEvents(){
+  const app = document.getElementById('app');
+  app.addEventListener('click', onAppClick);
+  document.getElementById('modalRoot').addEventListener('click', onAppClick); // #modalRoot là sibling của #app, không phải con — cần delegation riêng, xem ghi chú ở đầu file
+  initDashboardChart(); // no-op neu #dashboardProductivityChart khong ton tai (khong phai trang Dashboard)
+  const dm = document.getElementById('dashboardMonthInput');
+  if (dm) dm.addEventListener('change', e=>{ dashboardMonthValue = e.target.value; render(); });
+  const dd = document.getElementById('dashboardDayInput');
+  if (dd) dd.addEventListener('change', e=>{ dashboardDayValue = e.target.value; render(); });
+  const rm = document.getElementById('recordMonthInput');
+  if (rm) rm.addEventListener('change', e=>{ recordMonthFilter = e.target.value; recordPage = 1; render(); });
+  const rs = document.getElementById('recordSearchInput');
+  if (rs) rs.addEventListener('input', e=>{
+    recordSearch = e.target.value;
+    recordPage = 1;
+    const cursorPos = e.target.selectionStart;
+    render();
+    const newInput = document.getElementById('recordSearchInput');
+    if (newInput){ newInput.focus(); newInput.setSelectionRange(cursorPos, cursorPos); }
+  });
+  const rps = document.getElementById('recordPageSizeSelect');
+  if (rps) rps.addEventListener('change', e=>{ recordPageSize = Number(e.target.value); recordPage = 1; render(); });
+  const cs = document.getElementById('catalogSearchInput');
+  if (cs) cs.addEventListener('input', e=>{
+    catalogSearch = e.target.value;
+    catalogPage = 1;
+    const cursorPos = e.target.selectionStart;
+    render();
+    const newInput = document.getElementById('catalogSearchInput');
+    if (newInput){ newInput.focus(); newInput.setSelectionRange(cursorPos, cursorPos); }
+  });
+  const cfTo = document.getElementById('catalogFilterToSelect');
+  if (cfTo) cfTo.addEventListener('change', e=>{ catalogFilterTo = e.target.value; catalogPage=1; render(); });
+  const cfLoai = document.getElementById('catalogFilterLoaiSelect');
+  if (cfLoai) cfLoai.addEventListener('change', e=>{ catalogFilterLoai = e.target.value; catalogPage=1; render(); });
+  const cps = document.getElementById('catalogPageSizeSelect');
+  if (cps) cps.addEventListener('change', e=>{ catalogPageSize = Number(e.target.value); catalogPage=1; render(); });
+  const eq = document.getElementById('entryQty'); if (eq) eq.addEventListener('input', e=>{ entryState.quantity = Number(e.target.value)||0; });
+  const enNote = document.getElementById('entryNote'); if (enNote) enNote.addEventListener('input', e=>{ entryState.note = e.target.value; });
+  const enProdSearch = document.getElementById('entryProductSearch');
+  if (enProdSearch) enProdSearch.addEventListener('input', e=>{
+    entryState.productSearch = e.target.value;
+    const cursorPos = e.target.selectionStart;
+    render();
+    const newInput = document.getElementById('entryProductSearch');
+    if (newInput){ newInput.focus(); newInput.setSelectionRange(cursorPos, cursorPos); }
+  });
+  ['entryDate','entryStartH','entryStartM','entryEndH','entryEndM'].forEach(id=>{
+    const el = document.getElementById(id); if (!el) return;
+    el.addEventListener('change', e=>{
+      if (id==='entryDate') entryState.date = e.target.value;
+      if (id==='entryStartH') entryState.startH = e.target.value;
+      if (id==='entryStartM') entryState.startM = e.target.value;
+      if (id==='entryEndH') entryState.endH = e.target.value;
+      if (id==='entryEndM') entryState.endM = e.target.value;
+    });
+  });
+}
+
+function onAppClick(e){
+  const routeBtn = e.target.closest('[data-route]');
+  if (routeBtn){ setRoute(routeBtn.dataset.route); return; }
+  const actBtn = e.target.closest('[data-action]');
+  if (!actBtn) {
+    const chk = e.target.closest('[data-approve-check]');
+    if (chk){
+      const id = chk.dataset.approveCheck;
+      if (chk.checked) approveSelection.add(id); else approveSelection.delete(id);
+      render();
+    }
+    return;
+  }
+  const action = actBtn.dataset.action, val = actBtn.dataset.val, id = actBtn.dataset.id;
+  handleAction(action, val, id);
+}
+
+async function handleAction(action, val, id){
+  switch(action){
+    case 'logout': logout(); return;
+    case 'entrySetType': entryState.workType=val; entryState.workingTeam=null; entryState.maTP=null; entryState.congDoan=null; entryState.maNVL=null; entryState.indirectType=null; entryState.productSearch=''; render(); return;
+    case 'entrySetTeam': entryState.workingTeam=val; entryState.maTP=null; entryState.congDoan=null; entryState.maNVL=null; entryState.indirectType=null; entryState.productSearch=''; render(); return;
+    case 'entrySetProduct': entryState.maTP=val; entryState.congDoan=null; entryState.maNVL=null; render(); return;
+    case 'entrySetProcess': entryState.congDoan=val; entryState.maNVL=null; render(); return;
+    case 'entrySetNVL': entryState.maNVL=val; render(); return;
+    case 'entrySetIndirect': entryState.indirectType=val; render(); return;
+    case 'submitEntry': submitEntry(); return;
+    case 'adminTab': adminTab=val; render(); return;
+    case 'recordSort': recordSort = recordSort.key===val ? {key:val,dir:-recordSort.dir} : {key:val,dir:1}; render(); return;
+    case 'recordPrevPage': recordPage = Math.max(1, recordPage-1); render(); return;
+    case 'recordNextPage': recordPage = recordPage+1; render(); return;
+    case 'dashboardSetMode': dashboardMode = val; render(); return;
+    case 'catalogSort': catalogSort = catalogSort.key===val ? {key:val,dir:-catalogSort.dir} : {key:val,dir:1}; catalogPage=1; render(); return;
+    case 'catalogPrevPage': catalogPage = Math.max(1, catalogPage-1); render(); return;
+    case 'catalogNextPage': catalogPage = catalogPage+1; render(); return;
+    case 'parseImport': parseImport(val); return;
+    case 'parseWorkRecordImport': parseWorkRecordImport(); return;
+    case 'downloadTemplate': downloadTemplate(val); return;
+    case 'manualAdd': manualAdd(val); return;
+    case 'selectAllPending':{
+      const u=currentUser(); const scope = u.role==='Admin'?null:teamLedBy(u.maNV);
+      DB.workRecords.filter(r=>r.status==='Pending'&&(scope?r.workingTeam===scope:true)).forEach(r=>approveSelection.add(r.id));
+      render(); return;
+    }
+    case 'bulkApprove': bulkApprove(); return;
+    case 'approveOne': approveRecord(id); render(); return;
+    case 'rejectOne': openRejectModal(id); return;
+    case 'editRecord': loadRecordForEdit(id); return;
+    case 'applyTeamDash': window._tdFrom=document.getElementById('tdFrom').value; window._tdTo=document.getElementById('tdTo').value; render(); return;
+    case 'exportTeamRecords': exportRecords(currentTeamDashRows()); return;
+    case 'exportAllRecords': exportRecords(DB.workRecords); return;
+    case 'deleteRecord': confirmDeleteRecord(id); return;
+    case 'confirmClearAllRecords': confirmClearAllRecords(); return;
+    case 'viewAudit': showAuditModal(id); return;
+    case 'resetPassword': openResetPasswordModal(id); return;
+    case 'editEmployee': editEmployee(id); return;
+    case 'deleteEmployee': deleteEmployee(id); return;
+    case 'editTeam': editTeam(id); return;
+    case 'confirmImport': commitImport(); return;
+    case 'exportBackup': exportBackup(); return;
+    case 'parseBackupImport': parseBackupImport(); return;
+    case 'closeModal': closeModal(); return;
+  }
+}
+
+function currentTeamDashRows(){
+  const u=currentUser(); const isAdmin=u.role==='Admin'; const scope = isAdmin?null:teamLedBy(u.maNV);
+  const from = window._tdFrom||todayStr(), to = window._tdTo||todayStr();
+  return DB.workRecords.filter(r=> (scope?r.workingTeam===scope:true) && r.date>=from && r.date<=to);
+}
+
+/* ---------------- Entry submit logic ---------------- */
+function submitEntry(){
+  const s = entryState;
+  const u = currentUser();
+  s.errors = {};
+  const isEdit = !!s.editingId;
+  if (isEdit){
+    const existing = DB.workRecords.find(r=>r.id===s.editingId);
+    if (!existing || existing.maNV!==u.maNV){
+      showToast('Không tìm thấy Work Record hoặc bạn không có quyền sửa bản ghi này.', true);
+      entryState = freshEntryState(); render(); return;
+    }
+    const locked = (Date.now() - existing.createdAt) > 24*3600*1000;
+    if (existing.status!=='Rejected' && locked){
+      showToast('Work Record đã bị khoá (quá 24h kể từ khi nhập), không thể sửa.', true);
+      entryState = freshEntryState(); render(); return;
+    }
+  }
+  const startMin = Number(s.startH)*60+Number(s.startM);
+  const endMin = Number(s.endH)*60+Number(s.endM);
+  if (!s.workingTeam) s.errors.workingTeam = 'Chọn Working Team.';
+  if (s.workType==='Direct'){
+    if (!s.maTP) s.errors.maTP = 'Chọn Mã thành phẩm.';
+    if (!s.congDoan) s.errors.congDoan = 'Chọn Công đoạn.';
+    if (s.maTP && s.congDoan){
+      const nvlRows = getNVLRowsFor(s.maTP, s.workingTeam, s.congDoan);
+      if (nvlRows.some(r=>r.maNVL) && !s.maNVL) s.errors.maNVL = 'Chọn Mã NVL.';
+    }
+    if (s.quantity<0 || !Number.isInteger(s.quantity)) s.errors.quantity = 'Số lượng phải là số nguyên ≥ 0.';
+  } else {
+    if (!s.indirectType) s.errors.indirectType = 'Chọn loại việc gián tiếp.';
+  }
+  if (Object.keys(s.errors).length){ render(); return; }
+
+  const times = computeTimes(startMin, endMin);
+  if (times.insideBreak){ s.errors.time = 'Khoảng thời gian nằm hoàn toàn trong giờ Break — không được lưu.'; render(); return; }
+  if (times.actualTime<=0){ s.errors.time = 'Actual Time bằng 0 — không được lưu.'; render(); return; }
+  if (times.totalTime > 960){ s.errors.time = `Tổng thời gian ${Math.round(times.totalTime/60*10)/10} giờ — quá dài cho 1 ca, có thể anh chọn nhầm Giờ bắt đầu/Kết thúc. Kiểm tra lại.`; render(); return; }
+  const overlap = overlapsExisting(u.maNV, s.date, startMin, endMin, s.editingId);
+  if (overlap){ s.errors.time = `Trùng giờ với Work Record ${minToHHMM(overlap.start)}–${minToHHMM(overlap.end)} đã có.`; render(); return; }
+
+  let thoiGianChuan = 0;
+  if (s.workType==='Direct'){
+    thoiGianChuan = resolveStandardTime(s.maTP, s.workingTeam, s.congDoan, s.maNVL);
+    if (thoiGianChuan===null){ s.errors.standardTime = 'Chưa có Thời gian chuẩn phù hợp cho lựa chọn này. Liên hệ Admin.'; render(); return; }
+  }
+
+  const rec = isEdit ? DB.workRecords.find(r=>r.id===s.editingId) : {
+    id: uid(), maNV:u.maNV, ten:u.ten, workingTeam:s.workingTeam, date:s.date, workType:s.workType,
+    createdAt: Date.now(), status:'Pending',
+  };
+  const before = isEdit ? JSON.stringify(rec) : null;
+  Object.assign(rec, {
+    date:s.date, workingTeam:s.workingTeam, workType:s.workType,
+    maTP: s.workType==='Direct'?s.maTP:null, congDoan: s.workType==='Direct'?s.congDoan:null,
+    maNVL: s.workType==='Direct'?(s.maNVL||null):null,
+    indirectType: s.workType==='Indirect'?s.indirectType:null,
+    thoiGianChuan, quantity: s.workType==='Direct'?s.quantity:0,
+    start:startMin, end:endMin, totalTime:times.totalTime, breakTime:times.breakTime, actualTime:times.actualTime, otMinutes:times.otMinutes,
+    note: s.note||'',
+  });
+  if (isEdit){ rec.status='Pending'; rec.rejectReason=null; addAudit(rec.id, u.maNV, 'Employee sửa lại sau khi bị từ chối', before, JSON.stringify(rec)); }
+  else DB.workRecords.push(rec);
+  saveDB();
+  showToast('Đã lưu thành công.');
+  entryState = freshEntryState();
+  render();
+}
+function loadRecordForEdit(id){
+  const r = DB.workRecords.find(x=>x.id===id);
+  entryState = { date:r.date, workType:r.workType, workingTeam:r.workingTeam, maTP:r.maTP, congDoan:r.congDoan, maNVL:r.maNVL||null,
+    quantity:r.quantity, startH:String(Math.floor(r.start/60)).padStart(2,'0'), startM:String(r.start%60).padStart(2,'0'),
+    endH:String(Math.floor(r.end/60)%24).padStart(2,'0'), endM:String(r.end%60).padStart(2,'0'),
+    indirectType:r.indirectType, note:r.note||'', errors:{}, editingId:r.id };
+  setRoute('entry');
+}
+
+/* ---------------- Approval actions ---------------- */
+function canActOnRecord(r, u){
+  if (!r) return false;
+  if (u.role==='Admin') return true;
+  if (u.role==='Leader') return teamLedBy(u.maNV)===r.workingTeam;
+  return false;
+}
+function approveRecord(id){
+  const r = DB.workRecords.find(x=>x.id===id);
+  const u = currentUser();
+  if (!canActOnRecord(r, u)){ showToast('Bạn không có quyền duyệt bản ghi này.', true); return; }
+  const before = JSON.stringify(r);
+  r.status='Approved'; r.approvedBy=u.maNV; r.approvedAt=Date.now();
+  addAudit(id, u.maNV, 'Duyệt', before, JSON.stringify(r));
+  saveDB(); showToast('Đã duyệt.');
+}
+function bulkApprove(){
+  const u=currentUser();
+  let blocked = 0;
+  approveSelection.forEach(id=>{
+    const r = DB.workRecords.find(x=>x.id===id);
+    if (!r || r.status!=='Pending') return;
+    if (!canActOnRecord(r, u)){ blocked++; return; }
+    const before=JSON.stringify(r); r.status='Approved'; r.approvedBy=u.maNV; r.approvedAt=Date.now(); addAudit(id,u.maNV,'Duyệt hàng loạt',before,JSON.stringify(r));
+  });
+  approveSelection.clear(); saveDB();
+  showToast(blocked? `Đã duyệt các mục hợp lệ (bỏ qua ${blocked} mục ngoài phạm vi quyền).` : 'Đã duyệt các mục đã chọn.');
+  render();
+}
+function openRejectModal(id){
+  const rCheck = DB.workRecords.find(x=>x.id===id);
+  const uCheck = currentUser();
+  if (!canActOnRecord(rCheck, uCheck)){ showToast('Bạn không có quyền từ chối bản ghi này.', true); return; }
+  openModal(`<h3>Từ chối Work Record</h3>
+    <div class="field"><label>Lý do từ chối <span class="req">*</span></label><textarea id="rejectReason" rows="3" style="width:100%;padding:10px;border:1.5px solid var(--line);border-radius:8px;font-size:14px;"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-danger" id="confirmReject">Xác nhận từ chối</button>
+    </div>`);
+  document.getElementById('confirmReject').addEventListener('click', ()=>{
+    const reason = document.getElementById('rejectReason').value.trim();
+    if (!reason){ showToast('Cần nhập lý do từ chối.', true); return; }
+    const r = DB.workRecords.find(x=>x.id===id);
+    const u = currentUser();
+    if (!canActOnRecord(r, u)){ showToast('Bạn không có quyền từ chối bản ghi này.', true); closeModal(); return; }
+    const before = JSON.stringify(r);
+    r.status='Rejected'; r.rejectReason=reason; r.rejectedBy=u.maNV; r.rejectedAt=Date.now();
+    addAudit(id, u.maNV, 'Từ chối: '+reason, before, JSON.stringify(r));
+    saveDB(); closeModal(); showToast('Đã từ chối.'); render();
+  });
+}
+
+/* ---------------- Admin: import ---------------- */
+function parseImport(type){
+  const fileInputId = type==='processes' ? 'importFile2' : 'importFile';
+  const input = document.getElementById(fileInputId);
+  if (!input || !input.files.length){ showToast('Chọn file trước.', true); return; }
+  if (typeof XLSX==='undefined'){ showToast('Không tải được thư viện đọc Excel (cần internet cho lần đầu). Thử lại khi có mạng.', true); return; }
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    const wb = XLSX.read(e.target.result, {type:'binary'});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+    importPreview = {type, rows};
+    showImportPreviewModal();
+  };
+  reader.readAsBinaryString(file);
+}
+function showImportPreviewModal(){
+  const {type, rows} = importPreview;
+  const cols = rows.length ? Object.keys(rows[0]) : [];
+  const preview = rows.slice(0,15);
+
+  // Chặn ngay từ bước xem trước (không chờ tới lúc gõ XÁC NHẬN) nếu import sẽ gây hậu quả nghiêm trọng.
+  let blockedReason = '';
+  if (rows.length===0){
+    blockedReason = 'File không đọc được dòng dữ liệu nào (sai sheet, sai cột, hoặc file rỗng). Không thực hiện import.';
+  } else if (type==='employees' && !rows.some(row => String(row.Role||'').trim()==='Admin')){
+    blockedReason = 'File này không có dòng nào Role = Admin. Import Nhân viên ghi đè toàn bộ danh sách — nếu tiếp tục, tài khoản Admin hiện tại sẽ bị xoá và không ai truy cập được Quản trị nữa. Thêm ít nhất 1 dòng Role = Admin vào file rồi thử lại.';
+  }
+
+  openModal(`
+    <h3>Xem trước — ${rows.length} dòng</h3>
+    ${cols.length? `<div class="tablewrap"><table><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead>
+    <tbody>${preview.map(r=>`<tr>${cols.map(c=>`<td>${esc(r[c])}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}
+    ${rows.length>15?`<div class="hint">...và ${rows.length-15} dòng khác.</div>`:''}
+    ${blockedReason? `
+      <div class="banner" style="border-color:#fca5a5;background:#fef2f2;color:#b91c1c;">🛑 ${esc(blockedReason)}</div>
+      <div class="modal-actions"><button class="btn btn-outline" data-action="closeModal">Đóng</button></div>
+    ` : `
+      <div class="banner">Import này sẽ ${type==='standardtime'?'THÊM bản ghi mới (giữ lịch sử, không xóa dữ liệu cũ)':'GHI ĐÈ TOÀN BỘ danh sách hiện có'}. Gõ đúng chữ <b>XÁC NHẬN</b> bên dưới để tiếp tục.</div>
+      <div class="field" style="margin-top:10px;"><input type="text" id="importConfirmText" placeholder="Gõ XÁC NHẬN"></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+        <button class="btn btn-danger" data-action="confirmImport">Ghi vào hệ thống</button>
+      </div>
+    `}`);
+}
+async function commitImport(){
+  const txt = document.getElementById('importConfirmText').value.trim();
+  if (txt !== 'XÁC NHẬN'){ showToast('Chưa gõ đúng "XÁC NHẬN".', true); return; }
+  const {type, rows} = importPreview;
+  const u = currentUser();
+  let autoFilledCount = 0;
+  if (type==='catalog'){
+    const seen = {};
+    rows.forEach(row=>{
+      const loai = String(row.Loai||'').trim()==='GianTiep' ? 'Indirect' : 'Direct';
+      const to = row.To||'';
+      const congDoan = row.CongDoan||'';
+      if (!to || !congDoan) return; // dong thieu To/CongDoan bo qua
+      const maTP = loai==='Direct' ? String(row.MaTP||'').trim() : '';
+      const maNVL = loai==='Direct' ? String(row.MaNVL||'').trim() : '';
+      const key = loai+'|'+to+'|'+maTP+'|'+maNVL+'|'+congDoan;
+      seen[key] = {
+        workType: loai, workingTeam: to, maTP, tenTP: loai==='Direct'?(row.TenTP||''):'',
+        maNVL, tenNVL: loai==='Direct'?(row.TenNVL||''):'',
+        congDoan, thoiGianChuan: loai==='Direct' ? (Number(row.TGChuan)||0) : 0,
+      };
+    });
+    DB.workCatalog = Object.values(seen);
+    autoFilledCount = autoFillPendingStandardTimes();
+  } else if (type==='employees'){
+    const hasAdmin = rows.some(row => String(row.Role||'').trim()==='Admin');
+    if (!hasAdmin){
+      showToast('Import bị huỷ: file không có dòng nào Role = Admin — sẽ xoá hết tài khoản Admin hiện tại và khoá truy cập Quản trị. Thêm ít nhất 1 dòng Admin vào file rồi thử lại.', true);
+      return;
+    }
+    const existing = {}; DB.employees.forEach(e=>existing[e.maNV]=e.passwordHash);
+    DB.employees = [];
+    for (const row of rows){
+      const maNV = String(row.MNV||'').trim();
+      const homeTeam = row['Tổ']||'';
+      DB.employees.push({maNV, ten:row['Tên']||'', employeeTeam:homeTeam, role:row.Role||'Employee',
+        active:(row.Trangthai||'Active')!=='Inactive', passwordHash: existing[maNV] || null});
+    }
+    for (const e of DB.employees){ if (!e.passwordHash) e.passwordHash = await sha256(e.maNV); }
+  } else if (type==='teams'){
+    const seen = {};
+    rows.forEach(row=>{ const name=String(row.Tento||'').trim(); if(name) seen[name]={name, leaderMaNV:String(row.Leaderto||'').trim()}; });
+    DB.teams = Object.values(seen);
+  }
+  saveDB(); closeModal();
+  showToast('Import thành công.' + (autoFilledCount? ` Đã tự động cập nhật TG chuẩn cho ${autoFilledCount} Work Record đang chờ.` : ''));
+  render();
+}
+
+/* ---------------- Admin: records / accounts ---------------- */
+function confirmDeleteRecord(id){
+  const r = DB.workRecords.find(x=>x.id===id);
+  openModal(`<h3>Xóa Work Record</h3>
+    <div class="readout">Ngày ${fmtDateVN(r.date)} · ${esc(r.maNV)} · ${esc(r.ten)} · ${recordProductLabel(r)}</div>
+    <div class="banner">Xóa vĩnh viễn (Hard Delete), không khôi phục được. Audit Log sẽ ghi lại nội dung record trước khi xóa. Gõ <b>XOA</b> để xác nhận.</div>
+    <div class="field" style="margin-top:10px;"><input type="text" id="deleteConfirmText" placeholder="Gõ XOA"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-danger" id="confirmDeleteBtn">Xóa vĩnh viễn</button>
+    </div>`);
+  document.getElementById('confirmDeleteBtn').addEventListener('click', ()=>{
+    if (document.getElementById('deleteConfirmText').value.trim()!=='XOA'){ showToast('Chưa gõ đúng "XOA".', true); return; }
+    const u = currentUser();
+    addAudit(id, u.maNV, 'Admin xóa Work Record', JSON.stringify(r), null);
+    DB.workRecords = DB.workRecords.filter(x=>x.id!==id);
+    saveDB(); closeModal(); showToast('Đã xóa.'); render();
+  });
+}
+function showAuditModal(id){
+  const logs = DB.auditLogs.filter(l=>l.recordId===id).sort((a,b)=>b.changedAt-a.changedAt);
+  openModal(`<h3>Audit Log</h3>
+    ${logs.length? logs.map(l=>`
+      <div class="readout" style="margin-bottom:8px;">
+        <b>${esc(l.action)}</b><br>Người thực hiện: ${esc(l.changedBy)} · ${new Date(l.changedAt).toLocaleString('vi-VN')}
+      </div>`).join('') : '<div class="empty">Chưa có thay đổi nào.</div>'}
+    <div class="modal-actions"><button class="btn btn-outline" data-action="closeModal">Đóng</button></div>`);
+}
+function openResetPasswordModal(maNV){
+  openModal(`<h3>Reset mật khẩu — ${esc(maNV)}</h3>
+    <div class="field"><label>Mật khẩu mới <span class="req">*</span></label><input type="text" id="newPw" placeholder="Để trống = mặc định theo Mã NV"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-primary" id="confirmResetPw">Xác nhận</button>
+    </div>`);
+  document.getElementById('confirmResetPw').addEventListener('click', async ()=>{
+    const val = document.getElementById('newPw').value.trim() || maNV;
+    const emp = DB.employees.find(e=>e.maNV===maNV);
+    emp.passwordHash = await sha256(val);
+    saveDB(); closeModal(); showToast('Đã đặt lại mật khẩu.');
+  });
+}
+
+/* ---------------- Export ---------------- */
+function exportRecords(rows){
+  const headers = ['Ngay','MaNV','Ten','ToChinh','Loai','ToLamViec','MaTP','TenTP','MaNVL','TenNVL','CongDoan',
+    'TGChuan','SoLuong','TGBatDau','TGKetThuc','TGThaoTac','TGGiaiLao','TongTG','TGThaoTacChuan','NangSuat','GhiChu','TrangThai'];
+  const lines = [headers.join(',')];
+  rows.forEach(r=>{
+    const p = recordProductivity(r);
+    const info = recordCatalogInfo(r);
+    lines.push([r.date, r.maNV, r.ten, employeeTeamOf(r.maNV), r.workType==='Direct'?'Trực tiếp':'Gián tiếp', r.workingTeam,
+      info.maTP, info.tenTP, info.maNVL, info.tenNVL, info.congDoan,
+      r.workType==='Direct'?fmt3(r.thoiGianChuan):0, r.quantity, minToHHMM(r.start), minToHHMM(r.end),
+      r.actualTime, r.breakTime, r.totalTime, recordStandardTotal(r),
+      p!==null?p:'', r.note||'', r.status].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+  });
+  const blob = new Blob(['\uFEFF'+lines.join('\n')], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download = 'work-records-'+todayStr()+'.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ---------------- Boot ---------------- */
+(async function boot(){
+  await loadDB();
+  await ensureSeedPasswords();
+  currentSession = loadSession();
+  if (currentSession) route='dashboard';
+  render();
+  // BR-203: phiên 8h idle / remember-me 30 ngày trước đây chỉ được kiểm tra lúc tải lại trang (F5).
+  // Kiểm tra định kỳ để phiên thực sự tự hết hạn ngay cả khi tab vẫn đang mở, không cần F5.
+  setInterval(()=>{
+    if (!currentSession) return;
+    const now = Date.now();
+    const idleExpired = (now - currentSession.lastActive) > 8*3600*1000;
+    const rememberExpired = currentSession.remember ? (now - currentSession.loginAt) > 30*24*3600*1000 : true;
+    if (idleExpired && (!currentSession.remember || rememberExpired)){
+      logout();
+      showToast('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.', true);
+    }
+  }, 60*1000);
+})();
+</script>
+</body>
+</html>
