@@ -76,6 +76,10 @@
     .mobile-topbar .userbox { @apply text-[11px] text-right text-slate-500 flex-none; }
     .mobile-topbar .userbox b { @apply block text-white text-[12.5px] font-semibold; }
     .mobile-topbar .logoutBtn { @apply ml-1.5 flex-none rounded-lg border border-white/10 text-slate-300 text-[11px] px-2.5 py-1.5 hover:bg-white/10 hover:text-white transition-colors; }
+    /* Tu dong an Header khi cuon xuong (chi tren di dong — desktop dung sidebar co dinh, khong bi anh huong
+       vi .mobile-topbar da "md:hidden" san). Truot LEN (-100%) de bien mat qua canh tren man hinh. */
+    .mobile-topbar { transition: transform 0.3s ease-in-out; }
+    .mobile-topbar.scroll-down { transform: translateY(-100%); }
 
     /* ---- Content header (page title + status pill) ---- */
     .content-header { @apply flex items-center justify-between gap-3 px-5 pt-5 pb-4 md:px-8 md:pt-8 md:pb-6; }
@@ -92,6 +96,10 @@
     .bottomtabs button { @apply flex-1 flex flex-col items-center gap-1 py-2.5 text-[11px] font-semibold text-slate-500 min-h-[56px]; }
     .bottomtabs button .ic { @apply w-5 h-5; }
     .bottomtabs button.active { @apply text-brand-600; }
+    /* Tu dong an Bottom Nav khi cuon xuong (chi tren di dong — .bottomtabs da "md:hidden" san nen desktop
+       khong bi anh huong). Truot XUONG (+100%) de bien mat qua canh duoi man hinh, nguoc huong voi Header. */
+    .bottomtabs { transition: transform 0.3s ease-in-out; }
+    .bottomtabs.scroll-down { transform: translateY(100%); }
 
     /* ================= Cards & sections ================= */
     .card { @apply bg-white border border-slate-100 rounded-xl shadow-sm p-5 mb-4; }
@@ -612,22 +620,33 @@ function kpiIcon(name){
     clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path></svg>',
     split: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h6v6H4z"></path><path d="M14 14h6v6h-6z"></path><path d="M10 7h4"></path><path d="M17 10v4"></path></svg>',
     box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 8-9-5-9 5 9 5 9-5Z"></path><path d="M3 8v8l9 5 9-5V8"></path><path d="M12 13v8"></path></svg>',
+    alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>',
   };
   return icons[name] || '';
 }
 
 function tabsForRole(role){
+  if (role==='Admin'){
+    // Admin dùng Trang tổng quan riêng (Executive Dashboard toàn nhà máy — xem viewAdminDashboard()) thay vì
+    // tự nhập Work Record cho bản thân, nên bỏ hẳn tab "Nhập liệu" khỏi menu của Admin. Lưu ý: route 'entry'
+    // KHÔNG bị khoá ở isRouteAllowed() — Admin vẫn cần vào màn này khi Sửa 1 Work Record của người khác
+    // (loadRecordForEdit() tự điều hướng tới đó), chỉ là không còn nút tắt trong menu chính nữa.
+    return [
+      {k:'dashboard', label:'Tổng quan'},
+      {k:'history', label:'Lịch sử'},
+      {k:'approve', label:'Duyệt'},
+      {k:'teamdash', label:'Thống kê Tổ'},
+      {k:'admin', label:'Quản trị'},
+    ];
+  }
   const t = [
     {k:'dashboard', label:'Tổng quan'},
     {k:'entry', label:'Nhập liệu'},
     {k:'history', label:'Lịch sử'},
   ];
-  if (role==='Leader' || role==='Admin'){
+  if (role==='Leader'){
     t.push({k:'approve', label:'Duyệt'});
     t.push({k:'teamdash', label:'Tổ'});
-  }
-  if (role==='Admin'){
-    t.push({k:'admin', label:'Quản trị'});
   }
   return t;
 }
@@ -778,9 +797,45 @@ function initDashboardChart(retryCount){
   }
 }
 
+let adminDashboardChartInstance = null;
+/* Biểu đồ tròn (doughnut) tỷ lệ Direct/Indirect Time toàn nhà máy cho Admin Dashboard — CÙNG nguyên tắc với
+   initDashboardChart() ở trên: chỉ hoạt động khi đang ở trang Admin Dashboard (#adminDashboardChart tồn tại),
+   PHẢI huỷ instance cũ trước khi tạo mới vì #app bị thay thế toàn bộ mỗi lần render(). Được gọi vô điều kiện
+   từ attachShellEvents() giống hệt initDashboardChart() — tự no-op nếu không phải trang này. */
+function initAdminDashboardChart(retryCount){
+  retryCount = retryCount || 0;
+  const canvas = document.getElementById('adminDashboardChart');
+  if (!canvas) return; // khong phai trang Admin Dashboard, khong lam gi
+  if (typeof Chart==='undefined'){
+    if (retryCount < 5){ setTimeout(()=>initAdminDashboardChart(retryCount+1), 600); return; }
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:20px;">⚠️ Không tải được thư viện biểu đồ (Chart.js).</div>';
+    return;
+  }
+  if (adminDashboardChartInstance){ adminDashboardChartInstance.destroy(); adminDashboardChartInstance = null; }
+  const { directTime, indirectTime } = getAdminDirectIndirectSplit();
+  try {
+    adminDashboardChartInstance = new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: ['Trực tiếp', 'Gián tiếp'],
+        datasets: [{ data: [directTime, indirectTime], backgroundColor: ['#10b981', '#f59e0b'], borderWidth: 0 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '70%',
+        plugins: { legend: { display:false } },
+      }
+    });
+  } catch(err){
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:20px;">⚠️ Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
+  }
+}
+
 /* ---------------- Views: EMPLOYEE DASHBOARD ---------------- */
 function viewDashboard(){
   const u = currentUser();
+  // Admin xem Trang tổng quan riêng — Executive Dashboard toàn nhà máy, không phải nhật ký cá nhân
+  // (Admin thường không tự nhập Work Record), xem viewAdminDashboard() bên dưới.
+  if (u.role==='Admin') return viewAdminDashboard();
   const isMonth = dashboardMode==='month';
   const filterValue = isMonth ? dashboardMonthValue : dashboardDayValue;
   const rows = DB.workRecords.filter(r=> r.maNV===u.maNV && r.status!=='Rejected' && (isMonth ? r.date.startsWith(filterValue) : r.date===filterValue));
@@ -836,6 +891,95 @@ function viewDashboard(){
   `);
 }
 function fmtDateVN(s){ const [y,m,d]=s.split('-'); return `${d}/${m}/${y}`; }
+
+/* ---------------- Views: ADMIN EXECUTIVE DASHBOARD ---------------- */
+/* Tổng hợp Direct/Indirect Time TOÀN NHÀ MÁY (không lọc theo maNV như Dashboard nhân viên) trong đúng
+   khoảng Tháng/Ngày đang xem (dùng chung state dashboardMode/dashboardMonthValue/dashboardDayValue với
+   Dashboard nhân viên — Admin và Employee/Leader không bao giờ cùng xem 1 phiên nên dùng chung state là an
+   toàn). Tách thành hàm riêng để cả viewAdminDashboard() (vẽ số liệu) và initAdminDashboardChart() (vẽ biểu
+   đồ) đều lấy từ ĐÚNG 1 NGUỒN, tránh 2 nơi tính lệch nhau. Rejected không tính, khớp quy ước productivityForRows(). */
+function getAdminDirectIndirectSplit(){
+  const isMonth = dashboardMode==='month';
+  const filterValue = isMonth ? dashboardMonthValue : dashboardDayValue;
+  const rows = DB.workRecords.filter(r=> r.status!=='Rejected' && (isMonth ? r.date.startsWith(filterValue) : r.date===filterValue));
+  const directTime = rows.filter(r=>r.workType==='Direct').reduce((s,r)=>s+r.actualTime,0);
+  const indirectTime = rows.filter(r=>r.workType==='Indirect').reduce((s,r)=>s+r.actualTime,0);
+  return { directTime, indirectTime };
+}
+function viewAdminDashboard(){
+  const isMonth = dashboardMode==='month';
+  const filterValue = isMonth ? dashboardMonthValue : dashboardDayValue;
+  const rowsInRange = DB.workRecords.filter(r=> isMonth ? r.date.startsWith(filterValue) : r.date===filterValue);
+  const kpiRows = rowsInRange.filter(r=>r.status!=='Rejected');
+  const direct = kpiRows.filter(r=>r.workType==='Direct');
+  const qty = direct.reduce((s,r)=>s+r.quantity,0);
+  const prod = productivityForRows(direct);
+  const { directTime, indirectTime } = getAdminDirectIndirectSplit();
+  const totalTime = directTime + indirectTime;
+
+  // "Cần xử lý": Pending (chờ duyệt) và needsStandardTime (thiếu định mức TGC, do Import bỏ qua trước đó) —
+  // tính trên TOÀN BỘ dữ liệu (không giới hạn theo bộ lọc Tháng/Ngày đang xem), vì đây là việc Admin cần xử
+  // lý NGAY bất kể đang xem khoảng thời gian nào.
+  const pendingCount = DB.workRecords.filter(r=>r.status==='Pending').length;
+  const needsTGCCount = DB.workRecords.filter(r=>r.needsStandardTime).length;
+
+  const title = isMonth
+    ? `Tổng quan Nhà máy — Tháng ${filterValue.slice(5,7)}/${filterValue.slice(0,4)}`
+    : `Tổng quan Nhà máy — Ngày ${fmtDateVN(filterValue)}`;
+
+  // 10 Work Record mới nhất (theo thời điểm tạo) trên TOÀN HỆ THỐNG, không giới hạn theo bộ lọc Tháng/Ngày
+  // ở trên — để Admin luôn thấy được hoạt động gần nhất, kể cả khi đang xem lại 1 tháng trước.
+  const latestRows = DB.workRecords.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0,10);
+
+  return renderShell(`
+    <div class="section-title" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
+      <span>${esc(title.toUpperCase())}</span>
+      <div class="toolbar" style="margin:0;">
+        <div class="btnlist" style="gap:6px;">
+          <button data-action="dashboardSetMode" data-val="month" class="${isMonth?'active':''}" style="min-height:38px;padding:8px 16px;">Tháng</button>
+          <button data-action="dashboardSetMode" data-val="day" class="${!isMonth?'active':''}" style="min-height:38px;padding:8px 16px;">Ngày</button>
+        </div>
+        ${isMonth
+          ? `<input type="month" id="dashboardMonthInput" value="${dashboardMonthValue}">`
+          : `<input type="date" id="dashboardDayInput" value="${dashboardDayValue}">`}
+      </div>
+    </div>
+
+    <!-- a. Khối Thẻ KPI - Grid 4 cột (2 cột trên di động, xem class .kpis) -->
+    <div class="kpis">
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box emerald">${kpiIcon('target')}</div>
+        <div><div class="l">Năng suất TB Nhà máy</div><div class="v">${prod!==null?prod+'%':'—'}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box blue">${kpiIcon('clock')}</div>
+        <div><div class="l">Tổng giờ sản xuất</div><div class="v">${fmtHours(totalTime)}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box amber">${kpiIcon('box')}</div>
+        <div><div class="l">Tổng sản lượng</div><div class="v">${qty}</div></div></div></div>
+      <div class="kpi" style="cursor:pointer;" data-route="approve" title="Bấm để mở danh sách Chờ duyệt">
+        <div class="kpi-icon-row"><div class="kpi-icon-box violet">${kpiIcon('alert')}</div>
+          <div style="min-width:0;"><div class="l">Cần xử lý</div>
+            <div class="v" style="font-size:16.5px;line-height:1.3;">${pendingCount} chờ duyệt${needsTGCCount?`<br>${needsTGCCount} thiếu TGC`:''}</div>
+          </div></div></div>
+    </div>
+
+    <!-- b. Biểu đồ: tỷ lệ Thời gian Trực tiếp / Gián tiếp toàn nhà máy trong khoảng đang xem -->
+    <div class="card">
+      <div class="section-title">Tỷ lệ Thời gian Trực tiếp / Gián tiếp ${isMonth?'trong Tháng':'trong Ngày'}</div>
+      ${totalTime>0 ? `
+      <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
+        <div style="width:170px;height:170px;position:relative;flex:none;"><canvas id="adminDashboardChart"></canvas></div>
+        <div style="flex:1;min-width:160px;">
+          <div class="split-bar-legend" style="font-size:13.5px;margin-bottom:8px;"><span class="a">● Trực tiếp — ${fmtHours(directTime)} giờ</span></div>
+          <div class="split-bar-legend" style="font-size:13.5px;"><span class="b">● Gián tiếp — ${fmtHours(indirectTime)} giờ</span></div>
+        </div>
+      </div>` : '<div class="empty">Chưa có dữ liệu trong khoảng thời gian này.</div>'}
+    </div>
+
+    <!-- c. Bảng: Work Record mới nhất -->
+    <div class="card">
+      <div class="section-title">Work Record mới nhất (10 gần đây nhất, toàn hệ thống)</div>
+      ${renderRecordTable(latestRows, {showToolbar:false})}
+    </div>
+  `);
+}
 
 /* ---------------- Views: ENTRY FORM ---------------- */
 let entryState = null;
@@ -923,7 +1067,8 @@ function viewEntry(){
   return renderShell(`
     <div class="card">
       <div class="section-title">Thông tin ca làm việc</div>
-      <div class="field"><label>Ngày <span class="req">*</span></label><input type="date" id="entryDate" value="${s.date}"></div>
+      <div class="field ${s.errors.date?'has-err':''}"><label>Ngày <span class="req">*</span></label><input type="date" id="entryDate" value="${s.date}" max="${todayStr()}"></div>
+      ${s.errors.date?`<div class="err">${s.errors.date}</div>`:''}
       <div class="field"><label>Loại công việc <span class="req">*</span></label>
         <div class="btnlist grow">
           <button data-action="entrySetType" data-val="Direct" class="${s.workType==='Direct'?'active':''}">Trực tiếp</button>
@@ -1300,6 +1445,15 @@ function excelCellToDateStr(v){
   if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
   return s;
 }
+/* Chi kiem tra dinh dang yyyy-mm-dd bang regex la chua du — "2026-02-30" van khop regex nhung khong
+   phai ngay co that tren lich. Parse lai thanh Date roi doi nguoc ve chuoi, neu lech di (Date tu "tran"
+   thang/nam) tuc la ngay khong hop le. */
+function isRealCalendarDate(dateStr){
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const d = new Date(dateStr+'T00:00:00');
+  if (isNaN(d.getTime())) return false;
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0') === dateStr;
+}
 function excelCellToHHMM(v){
   if (v instanceof Date) return String(v.getHours()).padStart(2,'0')+':'+String(v.getMinutes()).padStart(2,'0');
   if (typeof v==='number' && v>=0 && v<1){
@@ -1318,7 +1472,7 @@ function validateWorkRecordRows(rows){
     const emp = DB.employees.find(e=>e.maNV===maNV);
     if (!emp) errors.push('Mã NV không tồn tại');
     const dateStr = excelCellToDateStr(row.Ngay);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) errors.push('Ngày không hợp lệ (cần yyyy-mm-dd)');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !isRealCalendarDate(dateStr)) errors.push('Ngày không hợp lệ (cần yyyy-mm-dd, và phải là ngày có thật trên lịch)');
     const workingTeam = String(row.ToLamViec||'').trim();
     if (!DB.teams.some(t=>t.name===workingTeam)) errors.push('Tổ không tồn tại');
     if (emp && workingTeam && !getPermittedTeams(maNV).includes(workingTeam)) errors.push('Nhân viên không có quyền làm ở Tổ này');
@@ -2075,6 +2229,7 @@ function attachShellEvents(){
   app.addEventListener('click', onAppClick);
   document.getElementById('modalRoot').addEventListener('click', onAppClick); // #modalRoot là sibling của #app, không phải con — cần delegation riêng, xem ghi chú ở đầu file
   initDashboardChart(); // no-op neu #dashboardProductivityChart khong ton tai (khong phai trang Dashboard)
+  initAdminDashboardChart(); // no-op neu #adminDashboardChart khong ton tai (khong phai trang Admin Dashboard)
   const dm = document.getElementById('dashboardMonthInput');
   if (dm) dm.addEventListener('change', e=>{ dashboardMonthValue = e.target.value; render(); });
   const dd = document.getElementById('dashboardDayInput');
@@ -2107,7 +2262,13 @@ function attachShellEvents(){
   if (cfLoai) cfLoai.addEventListener('change', e=>{ catalogFilterLoai = e.target.value; catalogPage=1; render(); });
   const cps = document.getElementById('catalogPageSizeSelect');
   if (cps) cps.addEventListener('change', e=>{ catalogPageSize = Number(e.target.value); catalogPage=1; render(); });
-  const eq = document.getElementById('entryQty'); if (eq) eq.addEventListener('input', e=>{ entryState.quantity = Number(e.target.value)||0; });
+  const eq = document.getElementById('entryQty'); if (eq) eq.addEventListener('input', e=>{
+    // KHONG dung "||0" o day — no se am tham nuot NaN (nguoi dung go chu/ky tu dac biet) thanh 0 hop le
+    // ma khong bao loi gi, khien nguoi dung tuong da nhap dung. De nguyen NaN de validation trong
+    // submitEntry() (!Number.isInteger(s.quantity)) bat loi va bao ro cho nguoi dung sua lai.
+    const v = e.target.value.trim();
+    entryState.quantity = v==='' ? 0 : Number(v);
+  });
   const enNote = document.getElementById('entryNote'); if (enNote) enNote.addEventListener('input', e=>{ entryState.note = e.target.value; });
   const enProdSearch = document.getElementById('entryProductSearch');
   if (enProdSearch) enProdSearch.addEventListener('input', e=>{
@@ -2223,6 +2384,7 @@ async function submitEntry(){
   }
   const startMin = Number(s.startH)*60+Number(s.startM);
   const endMin = Number(s.endH)*60+Number(s.endM);
+  if (!s.date || s.date > todayStr()) s.errors.date = 'Ngày không hợp lệ — không được chọn ngày trong tương lai.';
   if (!s.workingTeam) s.errors.workingTeam = 'Chọn Working Team.';
   if (s.workType==='Direct'){
     if (!s.maTP) s.errors.maTP = 'Chọn Mã thành phẩm.';
@@ -2275,6 +2437,7 @@ async function submitEntry(){
     addAudit(rec.id, u.maNV, 'Sửa lại Work Record', before, JSON.stringify(rec));
     const apiResult = await apiCallOrQueue('editWorkRecord', { session: currentSession, id: rec.id, changes: rec });
     if (apiResult && !apiResult.ok){
+      Object.assign(rec, JSON.parse(before)); // rollback cuc bo neu Server tu choi that su (vd trung gio voi ban ghi tu thiet bi khac) — tranh Client hien thi sai lech voi Server
       showToast(apiResult.error||'Sửa Work Record thất bại.', true);
       entryState = freshEntryState(); render(); return;
     }
@@ -2558,6 +2721,31 @@ function exportRecords(rows){
   const a = document.createElement('a'); a.href=url; a.download = 'work-records-'+todayStr()+'.csv'; a.click();
   URL.revokeObjectURL(url);
 }
+
+/* ---------------- Scroll: tu dong an/hien Header + Bottom Nav (chi anh huong man hinh di dong) ---------------- */
+/* Header (.mobile-topbar) va Bottom Nav (.bottomtabs) deu da "md:hidden" (chi hien tren di dong), nen listener
+   nay khong can tu kiem tra kich thuoc man hinh — tren desktop 2 phan tu khong ton tai/an san, toggle class
+   len chung khong gay anh huong gi. Vi render() thay the toan bo #app.innerHTML moi lan thao tac (chuyen tab,
+   sua Work Record...), 2 phan tu Header/Bottom Nav la CAC NODE DOM MOI moi lan render — nen phai truy van lai
+   bang querySelector NGAY TRONG moi lan cuon, khong duoc cache tham chieu tu truoc, neu khong se thao tac
+   nham len node DOM cu da bi go bo khoi trang. */
+let __lastScrollY = window.scrollY || 0;
+window.addEventListener('scroll', ()=>{
+  const currentY = window.scrollY || document.documentElement.scrollTop || 0;
+  const header = document.querySelector('.mobile-topbar');
+  const bottomNav = document.querySelector('.bottomtabs');
+  const scrolledDown = currentY > __lastScrollY;
+  const pastThreshold = currentY > 50; // chi bat dau an sau khi cuon qua 50px, tranh rung lac ngay dau trang
+  if (scrolledDown && pastThreshold){
+    if (header) header.classList.add('scroll-down');
+    if (bottomNav) bottomNav.classList.add('scroll-down');
+  } else {
+    // Cuon LEN (bat ky vi tri nao) -> hien lai ngay ca 2 thanh.
+    if (header) header.classList.remove('scroll-down');
+    if (bottomNav) bottomNav.classList.remove('scroll-down');
+  }
+  __lastScrollY = currentY < 0 ? 0 : currentY; // tranh gia tri am do hieu ung "bounce" cuon qua da tren iOS
+}, { passive: true });
 
 /* ---------------- Boot ---------------- */
 (async function boot(){
