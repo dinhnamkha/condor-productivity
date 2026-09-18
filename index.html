@@ -370,6 +370,11 @@ function recordProductLabel(r){
 /* Tách riêng Mã TP/Tên TP/Mã NVL/Tên NVL/Công đoạn — dùng cho bảng Work Record theo đúng thứ tự cột chuẩn (mỗi trường 1 cột riêng). */
 function recordCatalogInfo(r){
   if (r.workType!=='Direct') return { maTP:'', tenTP:'', maNVL:'', tenNVL:'', congDoan: r.indirectType||'' };
+  // Uu tien Ten TP/Ten NVL da CHUP NHANH tren chinh record (Client tu gui kem luc nop, khop dung Server) —
+  // chi tra ve tra cuu Catalog lam fallback cho cac record cu tao truoc khi co truong nay.
+  if (r.tenTP || r.tenNVL){
+    return { maTP: r.maTP||'', tenTP: r.tenTP||'', maNVL: r.maNVL||'', tenNVL: r.tenNVL||'', congDoan: r.congDoan||'' };
+  }
   const row = DB.workCatalog.find(c=> c.workType==='Direct' && c.maTP===r.maTP && c.workingTeam===r.workingTeam
     && c.congDoan===r.congDoan && (c.maNVL||'')===(r.maNVL||''));
   return { maTP: r.maTP||'', tenTP: row?row.tenTP:'', maNVL: r.maNVL||'', tenNVL: row?row.tenNVL:'', congDoan: r.congDoan||'' };
@@ -494,6 +499,8 @@ async function syncEmployeesAndTeamsFromAPI(session){
   if (teamResult && teamResult.ok) DB.teams = teamResult.teams;
   const catalogResult = await apiCall('listCatalog', { session });
   if (catalogResult && catalogResult.ok) DB.workCatalog = catalogResult.catalog;
+  const workRecordResult = await apiCall('listWorkRecords', { session });
+  if (workRecordResult && workRecordResult.ok) DB.workRecords = workRecordResult.workRecords;
   saveDB();
 }
 /* Nut "Lam moi du lieu": GUI HANG DOI dang cho (neu co) truoc, roi dong bo lai Nhan vien/To/Catalog tu Google Sheets,
@@ -1034,7 +1041,7 @@ function renderRecordTable(allRows, config){
     const p = recordProductivity(r);
     const info = recordCatalogInfo(r);
     const locked = (now - r.createdAt) > 24*3600*1000;
-    const canEdit = withEdit && r.maNV===currentUser().maNV && (r.status==='Rejected' || !locked);
+    const canEdit = withEdit && r.maNV===currentUser().maNV && (r.status==='Rejected' || !locked || currentUser().role==='Admin');
     return `<tr class="${r.needsStandardTime?'row-warn':''}">
       <td>${fmtDateVN(r.date)}</td><td>${esc(r.maNV)}</td><td>${esc(r.ten)}</td><td>${esc(employeeTeamOf(r.maNV))}</td>
       <td>${workTypeBadge(r.workType)}</td><td>${esc(r.workingTeam)}</td>
@@ -1319,7 +1326,7 @@ function validateWorkRecordRows(rows){
     if (/^\d{1,2}:\d{2}$/.test(startStr)) startMin = hhmmToMin(startStr.length===4?'0'+startStr:startStr); else errors.push('Giờ bắt đầu không hợp lệ (cần HH:MM)');
     if (/^\d{1,2}:\d{2}$/.test(endStr)) endMin = hhmmToMin(endStr.length===4?'0'+endStr:endStr); else errors.push('Giờ kết thúc không hợp lệ (cần HH:MM)');
 
-    let times=null, thoiGianChuan=0, needsStandardTime=false, overwriteId=null;
+    let times=null, thoiGianChuan=0, needsStandardTime=false, overwriteId=null, tenTP='', tenNVL='';
     if (errors.length===0){
       times = computeTimes(startMin, endMin);
       if (times.insideBreak) errors.push('Nằm hoàn toàn trong giờ Break');
@@ -1329,6 +1336,10 @@ function validateWorkRecordRows(rows){
         const resolved = resolveStandardTime(maTP, workingTeam, congDoan, maNVL);
         if (resolved===null){ thoiGianChuan = 0; needsStandardTime = true; } // BR mới: khong chan import, luu tam =0, gan co canh bao
         else thoiGianChuan = resolved;
+        const catRow = DB.workCatalog.find(c=> c.workType==='Direct' && c.maTP===maTP && c.workingTeam===workingTeam
+          && c.congDoan===congDoan && (c.maNVL||'')===(maNVL||''));
+        tenTP = catRow ? (catRow.tenTP||'') : '';
+        tenNVL = catRow ? (catRow.tenNVL||'') : '';
       }
       if (errors.length===0){
         // Trung khop CHINH XAC (maNV+Ngay+Loai+MaTP+CongDoan+Bat dau+Ket thuc) -> coi la CAP NHAT (ghi de), khong bao loi Trung gio.
@@ -1349,7 +1360,7 @@ function validateWorkRecordRows(rows){
         }
       }
     }
-    return { maNV, ten: emp?emp.ten:'', dateStr, workingTeam, workType, maTP, maNVL, congDoan, sl, startMin, endMin, times, thoiGianChuan,
+    return { maNV, ten: emp?emp.ten:'', employeeTeam: emp?(emp.employeeTeam||''):'', dateStr, workingTeam, workType, maTP, tenTP, maNVL, tenNVL, congDoan, sl, startMin, endMin, times, thoiGianChuan,
       needsStandardTime, overwriteId, note: String(row.GhiChu||'').trim(), errors };
   });
 }
@@ -1404,38 +1415,47 @@ function showWorkRecordPreviewModal(validated){
       ${ok.length? '<button class="btn btn-danger" id="confirmWRImport">Import dòng hợp lệ</button>' : ''}
     </div>`);
   if (ok.length){
-    document.getElementById('confirmWRImport').addEventListener('click', ()=>{
+    document.getElementById('confirmWRImport').addEventListener('click', async ()=>{
       if (document.getElementById('wrImportConfirmText').value.trim()!=='XÁC NHẬN'){ showToast('Chưa gõ đúng "XÁC NHẬN".', true); return; }
-      commitWorkRecordImport();
+      await commitWorkRecordImport();
     });
   }
 }
-function commitWorkRecordImport(){
+async function commitWorkRecordImport(){
   const validated = window._wrImportValidated || [];
   const ok = validated.filter(v=>v.errors.length===0);
   const u = currentUser();
   let createdCount=0, updatedCount=0, needsTGCCount=0;
+  // Xay dung san danh sach ban ghi (kem id cho dong moi) — gui nguyen 1 lan len Server (bulkImportWorkRecords),
+  // roi moi ap dung cung 1 danh sach nay vao DB cuc bo, tranh 2 nguon du lieu lech nhau.
+  const itemsToSend = [];
   ok.forEach(v=>{
     if (v.needsStandardTime) needsTGCCount++;
     const fields = {
-      maNV:v.maNV, ten:v.ten, workingTeam:v.workingTeam, date:v.dateStr, workType:v.workType,
-      maTP: v.workType==='Direct'?v.maTP:null, congDoan: v.workType==='Direct'?v.congDoan:null,
-      maNVL: v.workType==='Direct'?(v.maNVL||null):null,
+      maNV:v.maNV, ten:v.ten, employeeTeam:v.employeeTeam||'', workingTeam:v.workingTeam, date:v.dateStr, workType:v.workType,
+      maTP: v.workType==='Direct'?v.maTP:null, tenTP: v.workType==='Direct'?(v.tenTP||''):'',
+      congDoan: v.workType==='Direct'?v.congDoan:null,
+      maNVL: v.workType==='Direct'?(v.maNVL||null):null, tenNVL: v.workType==='Direct'?(v.tenNVL||''):'',
       indirectType: v.workType==='Indirect'?v.congDoan:null,
       thoiGianChuan: v.workType==='Direct'?v.thoiGianChuan:0, quantity: v.workType==='Direct'?v.sl:0,
-      start:v.startMin, end:v.endMin, totalTime:v.times.totalTime, breakTime:v.times.breakTime, actualTime:v.times.actualTime, otMinutes:v.times.otMinutes,
+      start:v.startMin, end:v.endMin, totalTime:v.times.totalTime, breakTime:v.times.breakTime, actualTime:v.times.actualTime,
       note: v.note||'', needsStandardTime: !!v.needsStandardTime,
     };
-    if (v.overwriteId){
-      const rec = DB.workRecords.find(r=>r.id===v.overwriteId);
+    itemsToSend.push(v.overwriteId ? Object.assign({overwriteId:v.overwriteId}, fields) : Object.assign({id: uid()}, fields));
+  });
+  const apiResult = await apiCallOrQueue('bulkImportWorkRecords', { session: currentSession, records: itemsToSend });
+  if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Work Record thất bại.', true); return; }
+  itemsToSend.forEach(item=>{
+    if (item.overwriteId){
+      const rec = DB.workRecords.find(r=>r.id===item.overwriteId);
       if (rec){
         const before = JSON.stringify(rec);
-        Object.assign(rec, fields, {status:'Pending', rejectReason:null});
+        Object.assign(rec, item, {status:'Pending', rejectReason:null});
         addAudit(rec.id, u.maNV, 'Cập nhật qua Import (ghi đè bản ghi trùng)', before, JSON.stringify(rec));
         updatedCount++;
       }
     } else {
-      DB.workRecords.push(Object.assign({id: uid(), createdAt: Date.now(), status:'Pending'}, fields));
+      DB.workRecords.push(Object.assign({createdAt: Date.now(), status:'Pending'}, item));
       createdCount++;
     }
   });
@@ -1869,8 +1889,11 @@ function confirmClearAllRecords(){
   const input = document.getElementById('clearRecordsConfirmText');
   const btn = document.getElementById('confirmClearRecordsBtn');
   input.addEventListener('input', ()=>{ btn.disabled = input.value.trim()!=='XÁC NHẬN'; });
-  btn.addEventListener('click', ()=>{
+  btn.addEventListener('click', async ()=>{
     if (input.value.trim()!=='XÁC NHẬN') return;
+    if (currentUser().role!=='Admin'){ showToast('Chỉ Admin được xoá sạch Work Record.', true); closeModal(); return; }
+    const apiResult = await apiCallOrQueue('clearAllWorkRecords', { session: currentSession });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Xoá sạch thất bại.', true); return; }
     const ids = new Set(DB.workRecords.map(r=>r.id));
     DB.workRecords = [];
     DB.auditLogs = DB.auditLogs.filter(a=>!ids.has(a.recordId));
@@ -2117,7 +2140,7 @@ async function handleAction(action, val, id){
     case 'entrySetProcess': entryState.congDoan=val; entryState.maNVL=null; render(); return;
     case 'entrySetNVL': entryState.maNVL=val; render(); return;
     case 'entrySetIndirect': entryState.indirectType=val; render(); return;
-    case 'submitEntry': submitEntry(); return;
+    case 'submitEntry': await submitEntry(); return;
     case 'adminTab': adminTab=val; render(); return;
     case 'recordSort': recordSort = recordSort.key===val ? {key:val,dir:-recordSort.dir} : {key:val,dir:1}; render(); return;
     case 'recordPrevPage': recordPage = Math.max(1, recordPage-1); render(); return;
@@ -2135,8 +2158,8 @@ async function handleAction(action, val, id){
       DB.workRecords.filter(r=>r.status==='Pending'&&(scope?r.workingTeam===scope:true)).forEach(r=>approveSelection.add(r.id));
       render(); return;
     }
-    case 'bulkApprove': bulkApprove(); return;
-    case 'approveOne': approveRecord(id); render(); return;
+    case 'bulkApprove': await bulkApprove(); return;
+    case 'approveOne': await approveRecord(id); render(); return;
     case 'rejectOne': openRejectModal(id); return;
     case 'editRecord': loadRecordForEdit(id); return;
     case 'applyTeamDash': window._tdFrom=document.getElementById('tdFrom').value; window._tdTo=document.getElementById('tdTo').value; render(); return;
@@ -2163,19 +2186,21 @@ function currentTeamDashRows(){
 }
 
 /* ---------------- Entry submit logic ---------------- */
-function submitEntry(){
+async function submitEntry(){
   const s = entryState;
   const u = currentUser();
   s.errors = {};
   const isEdit = !!s.editingId;
+  let existing = null;
   if (isEdit){
-    const existing = DB.workRecords.find(r=>r.id===s.editingId);
-    if (!existing || existing.maNV!==u.maNV){
+    existing = DB.workRecords.find(r=>r.id===s.editingId);
+    // Chu ban ghi HOAC Leader cua dung To lam viec ghi do HOAC Admin deu duoc sua (khop dung Server) — chi Xoa la rieng Admin.
+    if (!existing || !canEditRecord(existing, u)){
       showToast('Không tìm thấy Work Record hoặc bạn không có quyền sửa bản ghi này.', true);
       entryState = freshEntryState(); render(); return;
     }
     const locked = (Date.now() - existing.createdAt) > 24*3600*1000;
-    if (existing.status!=='Rejected' && locked){
+    if (u.role!=='Admin' && existing.status!=='Rejected' && locked){
       showToast('Work Record đã bị khoá (quá 24h kể từ khi nhập), không thể sửa.', true);
       entryState = freshEntryState(); render(); return;
     }
@@ -2203,28 +2228,49 @@ function submitEntry(){
   const overlap = overlapsExisting(u.maNV, s.date, startMin, endMin, s.editingId);
   if (overlap){ s.errors.time = `Trùng giờ với Work Record ${minToHHMM(overlap.start)}–${minToHHMM(overlap.end)} đã có.`; render(); return; }
 
-  let thoiGianChuan = 0;
+  let thoiGianChuan = 0, tenTP = '', tenNVL = '';
   if (s.workType==='Direct'){
-    thoiGianChuan = resolveStandardTime(s.maTP, s.workingTeam, s.congDoan, s.maNVL);
+    const catRow = DB.workCatalog.find(c=> c.workType==='Direct' && c.maTP===s.maTP && c.workingTeam===s.workingTeam
+      && c.congDoan===s.congDoan && (c.maNVL||'')===(s.maNVL||''));
+    thoiGianChuan = catRow ? catRow.thoiGianChuan : null;
     if (thoiGianChuan===null){ s.errors.standardTime = 'Chưa có Thời gian chuẩn phù hợp cho lựa chọn này. Liên hệ Admin.'; render(); return; }
+    tenTP = catRow ? (catRow.tenTP||'') : '';
+    tenNVL = catRow ? (catRow.tenNVL||'') : '';
   }
 
-  const rec = isEdit ? DB.workRecords.find(r=>r.id===s.editingId) : {
-    id: uid(), maNV:u.maNV, ten:u.ten, workingTeam:s.workingTeam, date:s.date, workType:s.workType,
+  // Tao moi: chup nhanhTo chinh (employeeTeam) cua nguoi nop tai thoi diem nop — khong tu doi sau nay du sau co doi To chinh.
+  const rec = isEdit ? existing : {
+    id: uid(), maNV:u.maNV, ten:u.ten, employeeTeam:u.employeeTeam||'',
     createdAt: Date.now(), status:'Pending',
   };
   const before = isEdit ? JSON.stringify(rec) : null;
   Object.assign(rec, {
     date:s.date, workingTeam:s.workingTeam, workType:s.workType,
-    maTP: s.workType==='Direct'?s.maTP:null, congDoan: s.workType==='Direct'?s.congDoan:null,
-    maNVL: s.workType==='Direct'?(s.maNVL||null):null,
+    maTP: s.workType==='Direct'?s.maTP:null, tenTP: s.workType==='Direct'?tenTP:'',
+    congDoan: s.workType==='Direct'?s.congDoan:null,
+    maNVL: s.workType==='Direct'?(s.maNVL||null):null, tenNVL: s.workType==='Direct'?tenNVL:'',
     indirectType: s.workType==='Indirect'?s.indirectType:null,
     thoiGianChuan, quantity: s.workType==='Direct'?s.quantity:0,
     start:startMin, end:endMin, totalTime:times.totalTime, breakTime:times.breakTime, actualTime:times.actualTime, otMinutes:times.otMinutes,
-    note: s.note||'',
+    note: s.note||'', needsStandardTime:false,
   });
-  if (isEdit){ rec.status='Pending'; rec.rejectReason=null; addAudit(rec.id, u.maNV, 'Employee sửa lại sau khi bị từ chối', before, JSON.stringify(rec)); }
-  else DB.workRecords.push(rec);
+  if (isEdit){
+    rec.status='Pending'; rec.rejectReason=null;
+    addAudit(rec.id, u.maNV, 'Sửa lại Work Record', before, JSON.stringify(rec));
+    const apiResult = await apiCallOrQueue('editWorkRecord', { session: currentSession, id: rec.id, changes: rec });
+    if (apiResult && !apiResult.ok){
+      showToast(apiResult.error||'Sửa Work Record thất bại.', true);
+      entryState = freshEntryState(); render(); return;
+    }
+  } else {
+    DB.workRecords.push(rec);
+    const apiResult = await apiCallOrQueue('addWorkRecord', { session: currentSession, record: rec });
+    if (apiResult && !apiResult.ok){
+      DB.workRecords = DB.workRecords.filter(x=>x.id!==rec.id); // rollback cuc bo neu Server tu choi that su (khong phai do mat mang)
+      showToast(apiResult.error||'Nộp Work Record thất bại.', true);
+      entryState = freshEntryState(); render(); return;
+    }
+  }
   saveDB();
   showToast('Đã lưu thành công.');
   entryState = freshEntryState();
@@ -2240,29 +2286,48 @@ function loadRecordForEdit(id){
 }
 
 /* ---------------- Approval actions ---------------- */
+/* Duyet/Tu choi: Admin bat ky, hoac Leader CUA DUNG TO LAM VIEC (workingTeam) tren record — khong phai To chinh cua nguoi nop. */
 function canActOnRecord(r, u){
   if (!r) return false;
   if (u.role==='Admin') return true;
   if (u.role==='Leader') return teamLedBy(u.maNV)===r.workingTeam;
   return false;
 }
-function approveRecord(id){
+/* Sua: chu ban ghi (bat ky Role) HOAC Leader cua dung To lam viec HOAC Admin — deu duoc sua.
+   Xoa thi KHAC — chi rieng Admin (xem confirmDeleteRecord). */
+function canEditRecord(r, u){
+  if (!r) return false;
+  if (String(r.maNV)===String(u.maNV)) return true;
+  return canActOnRecord(r, u);
+}
+async function approveRecord(id){
   const r = DB.workRecords.find(x=>x.id===id);
   const u = currentUser();
   if (!canActOnRecord(r, u)){ showToast('Bạn không có quyền duyệt bản ghi này.', true); return; }
+  const apiResult = await apiCallOrQueue('approveWorkRecord', { session: currentSession, id });
+  if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Duyệt thất bại.', true); return; }
   const before = JSON.stringify(r);
-  r.status='Approved'; r.approvedBy=u.maNV; r.approvedAt=Date.now();
+  r.status='Approved'; r.approvedBy=u.maNV; r.approvedAt=Date.now(); r.rejectReason=null;
   addAudit(id, u.maNV, 'Duyệt', before, JSON.stringify(r));
   saveDB(); showToast('Đã duyệt.');
 }
-function bulkApprove(){
+async function bulkApprove(){
   const u=currentUser();
   let blocked = 0;
+  const validRecords = [];
   approveSelection.forEach(id=>{
     const r = DB.workRecords.find(x=>x.id===id);
     if (!r || r.status!=='Pending') return;
     if (!canActOnRecord(r, u)){ blocked++; return; }
-    const before=JSON.stringify(r); r.status='Approved'; r.approvedBy=u.maNV; r.approvedAt=Date.now(); addAudit(id,u.maNV,'Duyệt hàng loạt',before,JSON.stringify(r));
+    validRecords.push(r);
+  });
+  if (validRecords.length){
+    const apiResult = await apiCallOrQueue('approveWorkRecord', { session: currentSession, ids: validRecords.map(r=>r.id) });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Duyệt hàng loạt thất bại.', true); return; }
+  }
+  validRecords.forEach(r=>{
+    const before=JSON.stringify(r); r.status='Approved'; r.approvedBy=u.maNV; r.approvedAt=Date.now(); r.rejectReason=null;
+    addAudit(r.id,u.maNV,'Duyệt hàng loạt',before,JSON.stringify(r));
   });
   approveSelection.clear(); saveDB();
   showToast(blocked? `Đã duyệt các mục hợp lệ (bỏ qua ${blocked} mục ngoài phạm vi quyền).` : 'Đã duyệt các mục đã chọn.');
@@ -2278,12 +2343,14 @@ function openRejectModal(id){
       <button class="btn btn-outline" data-action="closeModal">Hủy</button>
       <button class="btn btn-danger" id="confirmReject">Xác nhận từ chối</button>
     </div>`);
-  document.getElementById('confirmReject').addEventListener('click', ()=>{
+  document.getElementById('confirmReject').addEventListener('click', async ()=>{
     const reason = document.getElementById('rejectReason').value.trim();
     if (!reason){ showToast('Cần nhập lý do từ chối.', true); return; }
     const r = DB.workRecords.find(x=>x.id===id);
     const u = currentUser();
     if (!canActOnRecord(r, u)){ showToast('Bạn không có quyền từ chối bản ghi này.', true); closeModal(); return; }
+    const apiResult = await apiCallOrQueue('rejectWorkRecord', { session: currentSession, id, reason });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Từ chối thất bại.', true); return; }
     const before = JSON.stringify(r);
     r.status='Rejected'; r.rejectReason=reason; r.rejectedBy=u.maNV; r.rejectedAt=Date.now();
     addAudit(id, u.maNV, 'Từ chối: '+reason, before, JSON.stringify(r));
@@ -2372,18 +2439,24 @@ async function commitImport(){
       return;
     }
     const existing = {}; DB.employees.forEach(e=>existing[e.maNV]=e.passwordHash);
-    DB.employees = [];
+    const newEmployees = [];
     for (const row of rows){
       const maNV = String(row.MNV||'').trim();
       const homeTeam = row['Tổ']||'';
-      DB.employees.push({maNV, ten:row['Tên']||'', employeeTeam:homeTeam, role:row.Role||'Employee',
+      newEmployees.push({maNV, ten:row['Tên']||'', employeeTeam:homeTeam, role:row.Role||'Employee',
         active:(row.Trangthai||'Active')!=='Inactive', passwordHash: existing[maNV] || null});
     }
-    for (const e of DB.employees){ if (!e.passwordHash) e.passwordHash = await sha256(e.maNV); }
+    for (const e of newEmployees){ if (!e.passwordHash) e.passwordHash = await sha256(e.maNV); }
+    const apiResult = await apiCallOrQueue('replaceEmployees', { session: currentSession, employees: newEmployees });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Nhân viên thất bại.', true); return; }
+    DB.employees = (apiResult && apiResult.ok) ? apiResult.employees : newEmployees; // fallback cuc bo neu chua co API dung chung
   } else if (type==='teams'){
     const seen = {};
     rows.forEach(row=>{ const name=String(row.Tento||'').trim(); if(name) seen[name]={name, leaderMaNV:String(row.Leaderto||'').trim()}; });
-    DB.teams = Object.values(seen);
+    const newTeams = Object.values(seen);
+    const apiResult = await apiCallOrQueue('replaceTeams', { session: currentSession, teams: newTeams });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Tổ thất bại.', true); return; }
+    DB.teams = (apiResult && apiResult.ok) ? apiResult.teams : newTeams; // fallback cuc bo neu chua co API dung chung
   }
   saveDB(); closeModal();
   showToast('Import thành công.' + (autoFilledCount? ` Đã tự động cập nhật TG chuẩn cho ${autoFilledCount} Work Record đang chờ.` : ''));
@@ -2401,9 +2474,12 @@ function confirmDeleteRecord(id){
       <button class="btn btn-outline" data-action="closeModal">Hủy</button>
       <button class="btn btn-danger" id="confirmDeleteBtn">Xóa vĩnh viễn</button>
     </div>`);
-  document.getElementById('confirmDeleteBtn').addEventListener('click', ()=>{
+  document.getElementById('confirmDeleteBtn').addEventListener('click', async ()=>{
     if (document.getElementById('deleteConfirmText').value.trim()!=='XOA'){ showToast('Chưa gõ đúng "XOA".', true); return; }
     const u = currentUser();
+    if (u.role!=='Admin'){ showToast('Chỉ Admin được xoá Work Record.', true); closeModal(); return; }
+    const apiResult = await apiCallOrQueue('deleteWorkRecord', { session: currentSession, id });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Xoá thất bại.', true); return; }
     addAudit(id, u.maNV, 'Admin xóa Work Record', JSON.stringify(r), null);
     DB.workRecords = DB.workRecords.filter(x=>x.id!==id);
     saveDB(); closeModal(); showToast('Đã xóa.'); render();
@@ -2427,8 +2503,14 @@ function openResetPasswordModal(maNV){
     </div>`);
   document.getElementById('confirmResetPw').addEventListener('click', async ()=>{
     const val = document.getElementById('newPw').value.trim() || maNV;
-    const emp = DB.employees.find(e=>e.maNV===maNV);
-    emp.passwordHash = await sha256(val);
+    const newHash = await sha256(val);
+    const apiResult = await apiCallOrQueue('editEmployee', { session: currentSession, maNV, changes: { passwordHash: newHash } });
+    if (apiResult){
+      if (!apiResult.ok){ showToast(apiResult.error||'Đặt lại mật khẩu thất bại.', true); return; }
+      DB.employees = apiResult.employees; saveDB(); closeModal(); showToast('Đã đặt lại mật khẩu (đồng bộ dùng chung).'); return;
+    }
+    const emp = DB.employees.find(e=>e.maNV===maNV); // fallback cuc bo neu chua co API dung chung
+    emp.passwordHash = newHash;
     saveDB(); closeModal(); showToast('Đã đặt lại mật khẩu.');
   });
 }
