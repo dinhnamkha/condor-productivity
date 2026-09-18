@@ -300,9 +300,12 @@ async function sha256(str){
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
+function monthStartStr(){ return todayStr().slice(0,7)+'-01'; }
 function minToHHMM(m){ const h=Math.floor(m/60)%24, mm=m%60; return String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0'); }
 function hhmmToMin(s){ const [h,m]=s.split(':').map(Number); return h*60+m; }
 function fmt1(n){ return Math.round(n*10)/10; }
+/* Doi so PHUT -> chuoi GIO lam tron 1 chu so thap phan (VD 134.6) — dung cho cac KPI hien thi thoi gian. */
+function fmtHours(min){ return fmt1((min||0)/60); }
 /* Hiển thị Thời gian chuẩn với đúng 3 số thập phân (VD: 0.07 -> "0.070") để không bị hiểu nhầm là 0. */
 function fmt3(n){ return Number(n||0).toFixed(3); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -429,12 +432,22 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbz2oq3lzaXoKpjKwXLKuHL7
    request "preflight" CORS mà trình duyệt tự thêm khi có header đó. Để fetch() tự dùng text/plain mặc định
    (Apps Script vẫn đọc đúng JSON qua e.postData.contents bất kể Content-Type khai báo là gì) — đây là cách
    né lỗi CORS kinh điển khi gọi Apps Script Web App. */
-async function apiCall(action, payload){
+function sleepMs(ms){ return new Promise(resolve=>setTimeout(resolve, ms)); }
+/* Neu Server tra ve { busy:true } (LockService het thoi gian cho vi qua nhieu nguoi ghi cung luc — tam thoi,
+   KHONG phai bi tu choi that su), tu dong thu lai vai lan truoc khi tra ve cho noi goi — tranh nguoi dung phai
+   tu bam lai thu cong hoac (te hon) mat thao tac vi apiCallOrQueue coi day la "bi tu choi", khong dua vao hang doi. */
+async function apiCall(action, payload, _retriesLeft){
   if (!API_URL) return null;
+  if (_retriesLeft===undefined) _retriesLeft = 2;
   try {
     const res = await fetch(API_URL, { method:'POST', body: JSON.stringify(Object.assign({action}, payload)) });
     if (!res.ok) return null;
-    return await res.json();
+    const result = await res.json();
+    if (result && result.busy && _retriesLeft>0){
+      await sleepMs(1200);
+      return apiCall(action, payload, _retriesLeft-1);
+    }
+    return result;
   } catch(err){
     return null;
   }
@@ -468,24 +481,27 @@ async function apiCallOrQueue(action, payload){
    (kể cả bị server từ chối có lý do, VD trùng khoá do đã tự thêm cách khác trong lúc mất mạng) đều được
    loại khỏi hàng đợi — chỉ mục THỰC SỰ chưa gửi được (vẫn mất mạng) mới giữ lại thử tiếp. */
 async function syncPendingQueue(){
-  if (!API_URL) return { synced:0, remaining:0 };
+  if (!API_URL) return { synced:0, remaining:0, rejected:0 };
   const q = getSyncQueue();
-  if (!q.length) return { synced:0, remaining:0 };
-  let syncedCount = 0;
+  if (!q.length) return { synced:0, remaining:0, rejected:0 };
+  let syncedCount = 0, rejectedCount = 0;
   const stillPending = [];
   for (const item of q){
     const result = await apiCall(item.action, item.payload);
-    if (result!==null) syncedCount++; else stillPending.push(item);
+    if (result===null){ stillPending.push(item); continue; } // van chua ket noi duoc, giu lai thu tiep
+    if (result.ok) syncedCount++; else rejectedCount++; // gui toi Server thanh cong, nhung bi tu choi co ly do (VD het han sua, trung gio)
   }
   saveSyncQueue(stillPending);
-  return { synced: syncedCount, remaining: stillPending.length };
+  return { synced: syncedCount, remaining: stillPending.length, rejected: rejectedCount };
 }
 /* Trình duyệt tự báo khi có mạng trở lại — tự động thử gửi hàng đợi ngay lúc đó, không cần đợi người dùng bấm gì. */
 window.addEventListener('online', async ()=>{
   const r = await syncPendingQueue();
-  if (r.synced>0){
+  if (r.synced>0 || r.rejected>0){
     if (currentSession) await syncEmployeesAndTeamsFromAPI(currentSession);
-    showToast(`Đã tự động đồng bộ ${r.synced} thay đổi đang chờ lúc mất mạng.`);
+    let msg = r.synced>0 ? `Đã tự động đồng bộ ${r.synced} thay đổi đang chờ lúc mất mạng.` : '';
+    if (r.rejected>0) msg += (msg?' ':'') + `⚠️ ${r.rejected} thay đổi bị từ chối (VD hết hạn sửa, trùng dữ liệu) — vui lòng kiểm tra lại.`;
+    showToast(msg, r.rejected>0);
     render();
   }
 });
@@ -798,10 +814,10 @@ function viewDashboard(){
       <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box emerald">${kpiIcon('target')}</div>
         <div><div class="l">Năng suất</div><div class="v">${prod!==null?prod+'%':'—'}</div></div></div></div>
       <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box blue">${kpiIcon('clock')}</div>
-        <div><div class="l">Tổng thời gian (phút)</div><div class="v">${totalTime}</div></div></div></div>
+        <div><div class="l">Tổng thời gian (giờ)</div><div class="v">${fmtHours(totalTime)}</div></div></div></div>
       <div class="kpi">
         <div class="kpi-icon-row"><div class="kpi-icon-box violet">${kpiIcon('split')}</div>
-          <div style="flex:1;min-width:0;"><div class="l">Trực tiếp / Gián tiếp</div><div class="v" style="font-size:17px;">${directTime} / ${indirectTime} phút</div></div></div>
+          <div style="flex:1;min-width:0;"><div class="l">Trực tiếp / Gián tiếp</div><div class="v" style="font-size:17px;">${fmtHours(directTime)} / ${fmtHours(indirectTime)} giờ</div></div></div>
         <div class="split-bar"><div class="seg-a" style="width:${directPct}%;"></div><div class="seg-b" style="width:${indirectPct}%;"></div></div>
         <div class="split-bar-legend"><span class="a">${directPct}% Trực tiếp</span><span class="b">${indirectPct}% Gián tiếp</span></div>
       </div>
@@ -1152,14 +1168,14 @@ function viewTeamDash(){
   const u = currentUser();
   const isAdmin = u.role==='Admin';
   const scope = isAdmin ? null : teamLedBy(u.maNV);
-  const from = document.getElementById('tdFrom')?.value || todayStr();
-  const to = document.getElementById('tdTo')?.value || todayStr();
+  // Mac dinh xem tu DAU THANG hien tai den hom nay (khong phai chi 1 minh hom nay) — de vua vao Tab da co du
+  // lieu ngay, khong bi hieu lam la "chua lam" chi vi hom nay chua nhap gi.
+  window._tdFrom = window._tdFrom || monthStartStr();
+  window._tdTo = window._tdTo || todayStr();
   const rows = DB.workRecords.filter(r=>{
     if (scope && r.workingTeam!==scope) return false;
-    return r.date >= (window._tdFrom||todayStr()) && r.date <= (window._tdTo||todayStr());
+    return r.date >= window._tdFrom && r.date <= window._tdTo;
   });
-  window._tdFrom = window._tdFrom || todayStr();
-  window._tdTo = window._tdTo || todayStr();
 
   // Rejected không tính vào KPI/Productivity (khớp quy ước của dailyProductivity()) — nhưng vẫn hiển thị
   // đầy đủ (kể cả Rejected) ở bảng "Chi tiết Work Record" bên dưới để Leader thấy được cần theo dõi gì.
@@ -1192,8 +1208,8 @@ function viewTeamDash(){
     </div>
     <div class="kpis">
       <div class="kpi"><div class="l">Năng suất TB Tổ</div><div class="v">${avg!==null?avg+'%':'—'}</div></div>
-      <div class="kpi"><div class="l">Tổng Direct Time</div><div class="v">${totalDirect} ph</div></div>
-      <div class="kpi"><div class="l">Tổng Indirect Time</div><div class="v">${totalIndirect} ph</div></div>
+      <div class="kpi"><div class="l">Tổng Direct Time</div><div class="v">${fmtHours(totalDirect)} giờ</div></div>
+      <div class="kpi"><div class="l">Tổng Indirect Time</div><div class="v">${fmtHours(totalIndirect)} giờ</div></div>
       <div class="kpi"><div class="l">Số nhân viên</div><div class="v">${empRows.length}</div></div>
     </div>
     <div class="card">
@@ -2167,7 +2183,7 @@ async function handleAction(action, val, id){
     case 'exportAllRecords': exportRecords(DB.workRecords); return;
     case 'deleteRecord': confirmDeleteRecord(id); return;
     case 'confirmClearAllRecords': confirmClearAllRecords(); return;
-    case 'viewAudit': showAuditModal(id); return;
+    case 'viewAudit': await showAuditModal(id); return;
     case 'resetPassword': openResetPasswordModal(id); return;
     case 'editEmployee': editEmployee(id); return;
     case 'deleteEmployee': deleteEmployee(id); return;
@@ -2485,9 +2501,17 @@ function confirmDeleteRecord(id){
     saveDB(); closeModal(); showToast('Đã xóa.'); render();
   });
 }
-function showAuditModal(id){
-  const logs = DB.auditLogs.filter(l=>l.recordId===id).sort((a,b)=>b.changedAt-a.changedAt);
+/* Uu tien lay Audit Log tu Server (SHEET_AUDIT dung chung — Admin xem tren MAY NAO cung thay du lich su thay
+   doi cua MOI NGUOI, khong chi rieng may dang dung). Chi fallback ve DB.auditLogs cuc bo (chi co du lieu cua
+   may nay) khi khong ket noi duoc API. */
+async function showAuditModal(id){
+  openModal(`<h3>Audit Log</h3><div class="empty">Đang tải...</div>`);
+  const apiResult = await apiCall('listAuditLogs', { session: currentSession, recordId: id });
+  const logs = (apiResult && apiResult.ok) ? apiResult.auditLogs
+    : DB.auditLogs.filter(l=>l.recordId===id).sort((a,b)=>b.changedAt-a.changedAt);
+  const offlineNote = (apiResult && apiResult.ok) ? '' : '<div class="hint">⚠️ Không kết nối được Server — chỉ hiển thị log cục bộ trên máy này.</div>';
   openModal(`<h3>Audit Log</h3>
+    ${offlineNote}
     ${logs.length? logs.map(l=>`
       <div class="readout" style="margin-bottom:8px;">
         <b>${esc(l.action)}</b><br>Người thực hiện: ${esc(l.changedBy)} · ${new Date(l.changedAt).toLocaleString('vi-VN')}
