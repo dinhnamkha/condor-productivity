@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Condor Productivity (Offline)</title>
+<title>Condor Productivity</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"
   onerror="var s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js'; document.head.appendChild(s);"></script>
@@ -80,7 +80,10 @@
     /* ---- Content header (page title + status pill) ---- */
     .content-header { @apply flex items-center justify-between gap-3 px-5 pt-5 pb-4 md:px-8 md:pt-8 md:pb-6; }
     .page-title { @apply text-xl md:text-[26px] font-extrabold text-slate-900 m-0 tracking-tight; }
-    .offline-pill { @apply inline-flex items-center gap-1.5 text-[12px] font-bold text-emerald-700 bg-emerald-100 px-3 py-[7px] rounded-full flex-none; }
+    .offline-pill { @apply inline-flex items-center gap-1.5 text-[12px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-[7px] rounded-full flex-none cursor-pointer transition-colors; }
+    .offline-pill:hover { @apply bg-blue-100; }
+    .offline-pill.has-pending { @apply text-amber-700 bg-amber-50 border-amber-300; }
+    .offline-pill.has-pending:hover { @apply bg-amber-100; }
 
     main { @apply flex-1 w-full max-w-[1400px] mx-auto px-5 pb-24 md:px-8 md:pb-10; }
 
@@ -431,6 +434,57 @@ async function apiCall(action, payload){
     return null;
   }
 }
+
+/* ---------------- Hàng đợi đồng bộ (Sync Queue) ----------------
+   Khi 1 thao tác GHI qua API thất bại vì KHÔNG KẾT NỐI ĐƯỢC (mất mạng, API_URL chưa cấu hình, CORS...) —
+   KHÁC với bị server từ chối có lý do (sai quyền, trùng khoá...), trường hợp đó thử lại cũng sẽ sai y hệt
+   nên KHÔNG đưa vào hàng đợi — ghi lại thao tác đó, tự động gửi lại khi có mạng trở lại (sự kiện 'online'
+   của trình duyệt) hoặc khi bấm "Làm mới dữ liệu". Dữ liệu hàng đợi lưu trong localStorage, không mất khi
+   tắt trình duyệt giữa chừng lúc đang mất mạng. */
+const SYNC_QUEUE_KEY = 'condor_sync_queue_v1';
+function getSyncQueue(){
+  try { return JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY)) || []; } catch(err){ return []; }
+}
+function saveSyncQueue(q){ localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(q)); }
+function queueForSync(action, payload){
+  const q = getSyncQueue();
+  q.push({ id: uid(), action, payload, queuedAt: Date.now() });
+  saveSyncQueue(q);
+}
+/* Bọc apiCall() cho MỌI thao tác GHI: nếu apiCall thất bại vì không kết nối được (trả về null) VÀ đã có
+   cấu hình API_URL (tức đúng ra phải gọi được, chỉ là tạm thời mất mạng) — tự động đưa vào hàng đợi.
+   Trả về y hệt kết quả apiCall (null hoặc {ok,...}) để nơi gọi không cần đổi logic xử lý fallback cục bộ. */
+async function apiCallOrQueue(action, payload){
+  const result = await apiCall(action, payload);
+  if (result===null && API_URL) queueForSync(action, payload);
+  return result;
+}
+/* Gửi lại toàn bộ hàng đợi — gọi khi có mạng trở lại hoặc bấm "Làm mới dữ liệu". Mục đã gửi thành công
+   (kể cả bị server từ chối có lý do, VD trùng khoá do đã tự thêm cách khác trong lúc mất mạng) đều được
+   loại khỏi hàng đợi — chỉ mục THỰC SỰ chưa gửi được (vẫn mất mạng) mới giữ lại thử tiếp. */
+async function syncPendingQueue(){
+  if (!API_URL) return { synced:0, remaining:0 };
+  const q = getSyncQueue();
+  if (!q.length) return { synced:0, remaining:0 };
+  let syncedCount = 0;
+  const stillPending = [];
+  for (const item of q){
+    const result = await apiCall(item.action, item.payload);
+    if (result!==null) syncedCount++; else stillPending.push(item);
+  }
+  saveSyncQueue(stillPending);
+  return { synced: syncedCount, remaining: stillPending.length };
+}
+/* Trình duyệt tự báo khi có mạng trở lại — tự động thử gửi hàng đợi ngay lúc đó, không cần đợi người dùng bấm gì. */
+window.addEventListener('online', async ()=>{
+  const r = await syncPendingQueue();
+  if (r.synced>0){
+    if (currentSession) await syncEmployeesAndTeamsFromAPI(currentSession);
+    showToast(`Đã tự động đồng bộ ${r.synced} thay đổi đang chờ lúc mất mạng.`);
+    render();
+  }
+});
+
 /* Sau khi đăng nhập thành công qua API, đồng bộ lại DB.employees/DB.teams từ Google Sheets (nguồn dùng chung),
    thay cho dữ liệu cục bộ cũ — để mọi người cùng thấy đúng 1 danh sách. */
 async function syncEmployeesAndTeamsFromAPI(session){
@@ -438,7 +492,20 @@ async function syncEmployeesAndTeamsFromAPI(session){
   if (empResult && empResult.ok) DB.employees = empResult.employees;
   const teamResult = await apiCall('listTeams', { session });
   if (teamResult && teamResult.ok) DB.teams = teamResult.teams;
+  const catalogResult = await apiCall('listCatalog', { session });
+  if (catalogResult && catalogResult.ok) DB.workCatalog = catalogResult.catalog;
   saveDB();
+}
+/* Nut "Lam moi du lieu": GUI HANG DOI dang cho (neu co) truoc, roi dong bo lai Nhan vien/To/Catalog tu Google Sheets,
+   roi tai lai trang — bat ca du lieu moi nhat (VD dong nghiep vua duoc them) lan ban HTML/CSS/JS moi nhat. */
+async function hardReload(){
+  if (currentSession && API_URL){
+    try {
+      await syncPendingQueue();
+      await syncEmployeesAndTeamsFromAPI(currentSession);
+    } catch(err){ /* van tiep tuc reload du co loi */ }
+  }
+  location.reload();
 }
 
 let currentSession = null; // {maNV, remember, loginAt, lastActive, passwordHash}
@@ -548,6 +615,9 @@ function renderShell(bodyHtml){
   const sidenav = tabs.map(t=>`<button data-route="${t.k}" class="sidenav-item ${route===t.k?'active':''}"><span class="sidenav-icon">${navIcon(t.k)}</span>${t.label}</button>`).join('');
   const bottomnav = tabs.map(t=>`<button data-route="${t.k}" class="${route===t.k?'active':''}"><span class="ic">${navIcon(t.k)}</span>${t.label}</button>`).join('');
   const pageTitle = (tabs.find(t=>t.k===route) || {label:'Condor Productivity'}).label;
+  const pendingCount = getSyncQueue().length;
+  const reloadLabel = pendingCount>0 ? `⟳ Làm mới dữ liệu (${pendingCount} đang chờ gửi)` : '⟳ Làm mới dữ liệu';
+  const reloadTitle = pendingCount>0 ? `Có ${pendingCount} thay đổi chưa gửi lên được lúc mất mạng — bấm để thử gửi lại ngay` : 'Tải lại trang và đồng bộ dữ liệu mới nhất';
   return `
   <div class="app-shell">
     <aside class="sidebar">
@@ -576,7 +646,7 @@ function renderShell(bodyHtml){
       </div>
       <header class="content-header">
         <h1 class="page-title">${esc(pageTitle)}</h1>
-        <span class="offline-pill">&bull; Offline Mode</span>
+        <button class="offline-pill${pendingCount>0?' has-pending':''}" data-action="hardReload" title="${esc(reloadTitle)}">${esc(reloadLabel)}</button>
       </header>
       <main>${bodyHtml}</main>
     </div>
@@ -605,7 +675,7 @@ function viewLogin(){
       </div>
       <div class="checkline"><input type="checkbox" id="loginRemember" checked> Ghi nhớ đăng nhập trên thiết bị này</div>
       <button class="btn btn-primary" id="btnLogin">Đăng nhập</button>
-      <div class="banner">Bản offline — dữ liệu lưu trên trình duyệt này. Tài khoản mặc định: <b>Admin</b> / mật khẩu <b>Admin</b>. Vào mục Quản trị để thêm Tổ, Nhân viên...</div>
+      <div class="banner">Tài khoản mặc định: <b>Admin</b> / mật khẩu <b>Admin</b>. Vào mục Quản trị để thêm Tổ, Nhân viên...</div>
       ${(!window.crypto || !window.crypto.subtle) ? '<div class="banner" style="margin-top:10px;">⚠️ Trình duyệt hiện tại không hỗ trợ Web Crypto API (crypto.subtle) — không thể đăng nhập. Hãy mở file này bằng Chrome/Edge/Firefox bản mới.</div>' : ''}
       <div style="text-align:center;margin-top:14px;"><a href="#" id="resetToDefault" style="font-size:12.5px;color:#94a3b8;text-decoration:underline;">Không đăng nhập được? Đặt lại dữ liệu về mặc định</a></div>
     </div>
@@ -1409,7 +1479,7 @@ function manualAdd(type){
     (async()=>{
       const newEmp = {maNV, ten:val('addEmpTen'), employeeTeam:homeTeam, role:document.getElementById('addEmpRole').value,
         active:document.getElementById('addEmpTrangthai').value==='Active', passwordHash: await sha256(pw)};
-      const apiResult = await apiCall('addEmployee', { session: currentSession, employee: newEmp });
+      const apiResult = await apiCallOrQueue('addEmployee', { session: currentSession, employee: newEmp });
       if (apiResult){
         if (!apiResult.ok){ showToast(apiResult.error||'Thêm nhân viên thất bại.', true); return; }
         DB.employees = apiResult.employees; saveDB(); showToast('Đã thêm nhân viên (đồng bộ dùng chung).'); render(); return;
@@ -1425,7 +1495,7 @@ function manualAdd(type){
     if (DB.teams.some(t=>t.name===name)){ showToast('Tên Tổ đã tồn tại.', true); return; }
     const newTeam = {name, leaderMaNV: val('addTeamLeaderto')};
     (async()=>{
-      const apiResult = await apiCall('addTeam', { session: currentSession, team: newTeam });
+      const apiResult = await apiCallOrQueue('addTeam', { session: currentSession, team: newTeam });
       if (apiResult){
         if (!apiResult.ok){ showToast(apiResult.error||'Thêm Tổ thất bại.', true); return; }
         DB.teams = apiResult.teams; saveDB(); showToast('Đã thêm Team (đồng bộ dùng chung).'); render(); return;
@@ -1448,9 +1518,21 @@ function manualAdd(type){
     if (loai==='Direct' && !maTP){ showToast('Trực tiếp cần nhập Mã TP.', true); return; }
     const dup = DB.workCatalog.some(c=> c.workType===loai && c.workingTeam===to && (c.maTP||'')===maTP && (c.maNVL||'')===maNVL && c.congDoan===congDoan);
     if (dup){ showToast('Dòng này đã tồn tại (trùng khoá Loại+Tổ+Mã TP+Mã NVL+Công đoạn).', true); return; }
-    DB.workCatalog.push({workType:loai, workingTeam:to, maTP, tenTP, maNVL, tenNVL, congDoan, thoiGianChuan:tg});
-    const filled = autoFillPendingStandardTimes();
-    saveDB(); showToast('Đã thêm.' + (filled? ` Đã tự động cập nhật TG chuẩn cho ${filled} Work Record đang chờ.` : '')); render(); return;
+    const newItem = {workType:loai, workingTeam:to, maTP, tenTP, maNVL, tenNVL, congDoan, thoiGianChuan:tg};
+    (async()=>{
+      const apiResult = await apiCallOrQueue('addCatalog', { session: currentSession, item: newItem });
+      if (apiResult){
+        if (!apiResult.ok){ showToast(apiResult.error||'Thêm thất bại.', true); return; }
+        DB.workCatalog = apiResult.catalog;
+        const filled = autoFillPendingStandardTimes();
+        saveDB(); showToast('Đã thêm (đồng bộ dùng chung).' + (filled? ` Đã tự động cập nhật TG chuẩn cho ${filled} Work Record đang chờ.` : '')); render();
+        return;
+      }
+      DB.workCatalog.push(newItem); // fallback cuc bo neu chua co API dung chung
+      const filled = autoFillPendingStandardTimes();
+      saveDB(); showToast('Đã thêm.' + (filled? ` Đã tự động cập nhật TG chuẩn cho ${filled} Work Record đang chờ.` : '')); render();
+    })();
+    return;
   }
 }
 
@@ -1492,7 +1574,7 @@ function editEmployee(maNV){
     const newPw = document.getElementById('editEmpPw').value.trim();
     const changes = { ten: document.getElementById('editEmpTen').value.trim(), employeeTeam: homeTeam, role: newRole, active: newActive };
     if (newPw) changes.passwordHash = await sha256(newPw);
-    const apiResult = await apiCall('editEmployee', { session: currentSession, maNV, changes });
+    const apiResult = await apiCallOrQueue('editEmployee', { session: currentSession, maNV, changes });
     if (apiResult){
       if (!apiResult.ok){ showToast(apiResult.error||'Sửa thất bại.', true); return; }
       DB.employees = apiResult.employees; saveDB(); closeModal(); showToast('Đã lưu thay đổi (đồng bộ dùng chung).'); render();
@@ -1519,7 +1601,7 @@ function deleteEmployee(maNV){
     </div>`);
   document.getElementById('confirmDeleteEmp').addEventListener('click', async ()=>{
     if (document.getElementById('deleteEmpConfirmText').value.trim()!=='XOA'){ showToast('Chưa gõ đúng "XOA".', true); return; }
-    const apiResult = await apiCall('deleteEmployee', { session: currentSession, maNV });
+    const apiResult = await apiCallOrQueue('deleteEmployee', { session: currentSession, maNV });
     if (apiResult){
       if (!apiResult.ok){ showToast(apiResult.error||'Xoá thất bại.', true); return; }
       DB.employees = apiResult.employees;
@@ -1561,7 +1643,7 @@ function editTeam(oldName){
     const newLeader = document.getElementById('editTeamLeaderto').value.trim();
     if (!newName){ showToast('Tên Tổ không được để trống.', true); return; }
     if (newName!==oldName && DB.teams.some(x=>x.name!==oldName && x.name===newName)){ showToast('Tên Tổ mới đã tồn tại.', true); return; }
-    const apiResult = await apiCall('editTeam', { session: currentSession, oldName, changes: { name:newName, leaderMaNV:newLeader } });
+    const apiResult = await apiCallOrQueue('editTeam', { session: currentSession, oldName, changes: { name:newName, leaderMaNV:newLeader } });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Sửa Tổ thất bại.', true); return; }
     if (apiResult && apiResult.ok) DB.teams = apiResult.teams;
     else { t.name = newName; t.leaderMaNV = newLeader; } // fallback cuc bo neu chua co API dung chung
@@ -2028,6 +2110,7 @@ function onAppClick(e){
 async function handleAction(action, val, id){
   switch(action){
     case 'logout': logout(); return;
+    case 'hardReload': hardReload(); return;
     case 'entrySetType': entryState.workType=val; entryState.workingTeam=null; entryState.maTP=null; entryState.congDoan=null; entryState.maNVL=null; entryState.indirectType=null; entryState.productSearch=''; render(); return;
     case 'entrySetTeam': entryState.workingTeam=val; entryState.maTP=null; entryState.congDoan=null; entryState.maNVL=null; entryState.indirectType=null; entryState.productSearch=''; render(); return;
     case 'entrySetProduct': entryState.maTP=val; entryState.congDoan=null; entryState.maNVL=null; render(); return;
@@ -2277,7 +2360,10 @@ async function commitImport(){
         congDoan, thoiGianChuan: loai==='Direct' ? (Number(row.TGChuan)||0) : 0,
       };
     });
-    DB.workCatalog = Object.values(seen);
+    const newCatalog = Object.values(seen);
+    const apiResult = await apiCallOrQueue('replaceCatalog', { session: currentSession, catalog: newCatalog });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Danh mục thất bại.', true); return; }
+    DB.workCatalog = (apiResult && apiResult.ok) ? apiResult.catalog : newCatalog; // fallback cuc bo neu chua co API dung chung
     autoFilledCount = autoFillPendingStandardTimes();
   } else if (type==='employees'){
     const hasAdmin = rows.some(row => String(row.Role||'').trim()==='Admin');
