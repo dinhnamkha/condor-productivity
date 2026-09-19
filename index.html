@@ -488,6 +488,7 @@ function sleepMs(ms){ return new Promise(resolve=>setTimeout(resolve, ms)); }
    la loi nghiep vu, van la "Online"); false = that bai ket noi (mat mang/CORS/server loi); null = phien nay
    CHUA tung goi API lan nao, nen KHONG THE xac dinh — hien thi "Không xác định", khong duoc gia lap Online. */
 let lastApiOk = null;
+let lastApiTimedOut = false; // true neu lan apiCall() gan nhat bi huy do vuot API_TIMEOUT_MS (server qua cham/khong phan hoi)
 /* Neu Server tra ve { busy:true } (LockService het thoi gian cho vi qua nhieu nguoi ghi cung luc — tam thoi,
    KHONG phai bi tu choi that su), tu dong thu lai vai lan truoc khi tra ve cho noi goi — tranh nguoi dung phai
    tu bam lai thu cong hoac (te hon) mat thao tac vi apiCallOrQueue coi day la "bi tu choi", khong dua vao hang doi. */
@@ -510,12 +511,20 @@ function isAuthRejectedError(msg){
     || msg.indexOf('Tài khoản tạm khoá') !== -1
     || msg.indexOf('Tài khoản đã bị khoá') !== -1;
 }
+/* Apps Script Web App co the "ngu" sau 1 thoi gian khong ai goi (hoac vua Deploy lai) — request DAU TIEN sau
+   do co the mat toi 20-30s de "danh thuc". KHONG dat timeout qua ngan (se huy oan 1 request dang chay binh
+   thuong, chi la cham), nhung PHAI co timeout de khong bao gio "treo vo han" ma khong co phan hoi gi ca — dat
+   35s, du rong cho truong hop "danh thuc" nhung van dam bao cuoi cung LUON co ket qua (thanh cong/loi) hien ra. */
+const API_TIMEOUT_MS = 35000;
 async function apiCall(action, payload, _retriesLeft){
   if (!API_URL) return null;
   if (_retriesLeft===undefined) _retriesLeft = 2;
+  lastApiTimedOut = false;
   pendingApiCalls++; updateGlobalLoadingBar();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(()=>controller.abort(), API_TIMEOUT_MS);
   try {
-    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify(Object.assign({action}, payload)) });
+    const res = await fetch(API_URL, { method:'POST', body: JSON.stringify(Object.assign({action}, payload)), signal: controller.signal });
     if (!res.ok) { lastApiOk = false; return null; }
     const result = await res.json();
     if (result && result.busy && _retriesLeft>0){
@@ -536,8 +545,10 @@ async function apiCall(action, payload, _retriesLeft){
     return result;
   } catch(err){
     lastApiOk = false;
+    lastApiTimedOut = (err && err.name==='AbortError');
     return null;
   } finally {
+    clearTimeout(timeoutId);
     pendingApiCalls--; updateGlobalLoadingBar();
   }
 }
@@ -2829,6 +2840,11 @@ function attachLoginEvents(){
     btn.disabled = true;
     const originalBtnText = btn.textContent;
     btn.textContent = 'Đang đăng nhập...';
+    // Neu qua 4s van chua co phan hoi — rat co the API Apps Script vua "ngu"/vua Deploy lai va dang "danh thuc"
+    // (co the mat toi 20-30s cho LAN DAU sau khi ngu) — cap nhat ro rang, tranh cam giac "treo" khong biet dang cho gi.
+    const slowHintTimer = setTimeout(()=>{
+      if (errBox) errBox.innerHTML = '<div class="banner" style="margin-bottom:10px;">⏳ Đang chờ phản hồi từ máy chủ (có thể mất tới 20–30 giây nếu máy chủ vừa khởi động lại)...</div>';
+    }, 4000);
     try {
       let hash;
       try { hash = await sha256(pw); }
@@ -2836,7 +2852,7 @@ function attachLoginEvents(){
         errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Không thể mã hoá mật khẩu (Web Crypto API không khả dụng trong ngữ cảnh hiện tại — thử mở file này qua trình duyệt Chrome/Edge/Firefox bản mới, tránh trình duyệt trong app khác).</div>';
         return;
       }
-      // Thu dang nhap qua API dung chung (Google Sheets) truoc — neu API_URL chua cau hinh hoac loi mang, apiCall tra ve null.
+      // Thu dang nhap qua API dung chung (Google Sheets) truoc — neu API_URL chua cau hinh hoac loi mang/timeout, apiCall tra ve null.
       const apiResult = await apiCall('login', { maNV, passwordHash: hash });
       if (apiResult){
         if (!apiResult.ok){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${esc(apiResult.error||'Đăng nhập thất bại.')}</div>`; return; }
@@ -2847,17 +2863,31 @@ function attachLoginEvents(){
         route = 'dashboard'; render();
         return;
       }
-      // Fallback: che do cuc bo (chua deploy API dung chung, hoac API dang loi) - dung 1 THONG DIEP CHUNG cho
-      // "khong ton tai"/"sai mat khau"/"bi khoa", tranh lo thong tin ke tan cong co the dung de do MNV nao ton tai
-      // (truoc day 2 truong hop nay co 2 thong bao khac nhau — day la loi da duoc audit va sua o day).
+      // apiCall() tra ve null: HOẶC chua cau hinh API_URL (luon nhu vay, dung che do cuc bo binh thuong — KHONG
+      // phai loi), HOAC (neu DA cau hinh API_URL) that su khong ket noi duoc / timeout / bi mang chan — truong hop
+      // sau PHAI bao ro cho nguoi dung biet, tranh viec am tham roi vao nhanh cuc bo roi bao "sai mat khau" gay
+      // hieu lam (day chinh la nguyen nhan gay cam giac "dang nhap rat lau ma khong thay bao trang thai gi").
+      const triedOnlineButFailed = !!API_URL;
+      const onlineFailReason = lastApiTimedOut
+        ? 'Không nhận được phản hồi từ máy chủ trong '+Math.round(API_TIMEOUT_MS/1000)+'s (timeout).'
+        : 'Không kết nối được tới máy chủ (mất mạng, hoặc máy chủ đang lỗi).';
+      // Fallback: che do cuc bo — dung 1 THONG DIEP CHUNG cho "khong ton tai"/"sai mat khau"/"bi khoa", tranh lo
+      // thong tin ke tan cong co the dung de do MNV nao ton tai (loi enumeration cu da duoc audit va sua o day).
       const GENERIC_LOGIN_FAIL = 'Mã nhân viên hoặc mật khẩu không chính xác.';
       const emp = DB.employees.find(e=>e.maNV===maNV);
-      if (!emp || !emp.active || hash !== emp.passwordHash){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${GENERIC_LOGIN_FAIL}</div>`; return; }
+      if (!emp || !emp.active || hash !== emp.passwordHash){
+        errBox.innerHTML = triedOnlineButFailed
+          ? `<div class="err" style="margin-bottom:10px;">${esc(onlineFailReason)} Đã thử chế độ cục bộ nhưng cũng không đăng nhập được (${esc(GENERIC_LOGIN_FAIL)})</div>`
+          : `<div class="err" style="margin-bottom:10px;">${GENERIC_LOGIN_FAIL}</div>`;
+        return;
+      }
       login(maNV, remember, hash);
+      if (triedOnlineButFailed) showToast('⚠️ '+onlineFailReason+' Đã đăng nhập ở chế độ cục bộ (dữ liệu có thể chưa mới nhất) — thử "Làm mới dữ liệu" khi có mạng trở lại.', true);
       if (emp.mustChangePassword){ route = 'forcechangepw'; render(); return; }
       route = 'dashboard';
       render();
     } finally {
+      clearTimeout(slowHintTimer);
       // Sau khi dang nhap thanh cong, render() da ve lai man hinh khac (khong con nut nay) nen getElementById
       // se tra ve null — kiem tra lai truoc khi dong, tranh loi.
       const btnAfter = document.getElementById('btnLogin');
