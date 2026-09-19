@@ -191,6 +191,18 @@
     .toast.show { @apply opacity-100 translate-y-0; }
     .toast.err { @apply bg-rose-900 border-rose-700; }
 
+    /* ================= Global Loading Bar =================
+       Thanh trang thai toan cuc — hien khi co it nhat 1 request mang (apiCall) dang cho phan hoi, de nguoi
+       dung LUON thay duoc trang "dang xu ly", khong con cam giac "bam ma khong thay gi" khi mang cham/timeout. */
+    #globalLoadingBar {
+      @apply fixed top-0 left-0 h-[3px] w-full z-[100] pointer-events-none opacity-0;
+      background: linear-gradient(90deg, transparent, #2563eb, transparent);
+      background-size: 60% 100%;
+      transition: opacity .15s;
+    }
+    #globalLoadingBar.show { @apply opacity-100; animation: globalLoadingSlide 1.1s ease-in-out infinite; }
+    @keyframes globalLoadingSlide { 0%{background-position:-60% 0;} 100%{background-position:160% 0;} }
+
     /* ================= Modal ================= */
     .modal-overlay { @apply fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-end md:items-center justify-center z-[60] p-0 md:p-4; }
     .modal { @apply bg-white rounded-t-2xl md:rounded-2xl max-w-xl w-full max-h-[88vh] overflow-y-auto p-5 shadow-2xl; }
@@ -224,6 +236,7 @@
 </head>
 
 <body>
+<div id="globalLoadingBar"></div>
 <div id="app"></div>
 <div id="modalRoot"></div>
 <div class="toast" id="toast"></div>
@@ -318,6 +331,7 @@ function monthStartStr(){ return todayStr().slice(0,7)+'-01'; }
 function minToHHMM(m){ const h=Math.floor(m/60)%24, mm=m%60; return String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0'); }
 function hhmmToMin(s){ const [h,m]=s.split(':').map(Number); return h*60+m; }
 function fmt1(n){ return Math.round(n*10)/10; }
+function fmt2(n){ return (Math.round((n||0)*100)/100).toFixed(2); }
 /* Doi so PHUT -> chuoi GIO lam tron 1 chu so thap phan (VD 134.6) — dung cho cac KPI hien thi thoi gian. */
 function fmtHours(min){ return fmt1((min||0)/60); }
 /* Hiển thị Thời gian chuẩn với đúng 3 số thập phân (VD: 0.07 -> "0.070") để không bị hiểu nhầm là 0. */
@@ -477,22 +491,35 @@ let lastApiOk = null;
 /* Neu Server tra ve { busy:true } (LockService het thoi gian cho vi qua nhieu nguoi ghi cung luc — tam thoi,
    KHONG phai bi tu choi that su), tu dong thu lai vai lan truoc khi tra ve cho noi goi — tranh nguoi dung phai
    tu bam lai thu cong hoac (te hon) mat thao tac vi apiCallOrQueue coi day la "bi tu choi", khong dua vao hang doi. */
+/* Thanh trang thai toan cuc (globalLoadingBar) — dem so request dang cho (pendingApiCalls) de xu ly dung
+   truong hop goi long nhau/thu lai (busy retry o duoi) van khong tat thanh som. Dat o day (khong phai
+   trong apiCallOrQueue) de bat duoc CA syncPendingQueue()/syncEmployeesAndTeamsFromAPI() goi apiCall() truc
+   tiep, khong chi thao tac ghi qua apiCallOrQueue(). */
+let pendingApiCalls = 0;
+function updateGlobalLoadingBar(){
+  const bar = document.getElementById('globalLoadingBar');
+  if (!bar) return;
+  if (pendingApiCalls>0) bar.classList.add('show'); else bar.classList.remove('show');
+}
 async function apiCall(action, payload, _retriesLeft){
   if (!API_URL) return null;
   if (_retriesLeft===undefined) _retriesLeft = 2;
+  pendingApiCalls++; updateGlobalLoadingBar();
   try {
     const res = await fetch(API_URL, { method:'POST', body: JSON.stringify(Object.assign({action}, payload)) });
     if (!res.ok) { lastApiOk = false; return null; }
     const result = await res.json();
     if (result && result.busy && _retriesLeft>0){
       await sleepMs(1200);
-      return apiCall(action, payload, _retriesLeft-1);
+      return await apiCall(action, payload, _retriesLeft-1);
     }
     lastApiOk = true; // cham duoc toi Server va nhan duoc JSON hop le (bat ke ok:true/false ve nghiep vu)
     return result;
   } catch(err){
     lastApiOk = false;
     return null;
+  } finally {
+    pendingApiCalls--; updateGlobalLoadingBar();
   }
 }
 
@@ -1709,12 +1736,34 @@ function buildTeamSummaryRows(scope, fromStr, toStr){
       lentByTeam[key].actual += r.actualTime;
       if (r.workType==='Direct' && r.maTP) lentByTeam[key].maTPs.add(r.maTP); else if (r.workType==='Indirect' && r.indirectType) lentByTeam[key].maTPs.add(r.indirectType);
     });
-    Object.values(lentByTeam).forEach(x=> lentOut.push({ date:dateStr, team:x.team, hours:fmt1(x.actual/60), items:[...x.maTPs].join(', ') }));
+    Object.values(lentByTeam).forEach(x=> lentOut.push({ date:dateStr, team:x.team, hours:x.actual/60, items:[...x.maTPs].join(', ') }));
     d.setUTCDate(d.getUTCDate()+1);
     guard++;
   }
   rows.sort((a,b)=> a.date===b.date ? 0 : (a.date<b.date?-1:1));
-  return { rows, lentOut, giaiLaoTotalHour: fmt1(giaiLaoTotal/60) };
+
+  // ---- Tong cong ca khoang thoi gian dang xem (dung cho o Tong SL/TG dau bang + dong TONG cuoi bang) ----
+  // Nang suat Tổ tong hop (overallProductivity): CHI gop cac dong Truc tiep DA CO TG chuan (bo qua dong thieu
+  // TG chuan o CA tu so lan mau so, thay vi coi thieu = 0) — de khong lam sai lech ty le, dung nguyen tac
+  // "SUM(TG ly thuyet)/SUM(TG nhan cong)*100" nhu cong thuc productivityForRows() hien co nhung tren du lieu
+  // cua bang nay (TG chuan Tong theo Ma TP, khac voi TG chuan tung cong doan).
+  let totalQty = 0, totalLaborHour = 0, totalTheoreticalHour = 0, missingStdCount = 0;
+  let prodNumerator = 0, prodDenominator = 0;
+  rows.forEach(r=>{
+    totalLaborHour += r.laborHour;
+    if (r.workType==='Direct'){
+      totalQty += r.qty;
+      if (r.stdHour===null) missingStdCount++;
+      else {
+        totalTheoreticalHour += r.theoreticalHour;
+        if (r.laborHour>0){ prodNumerator += r.theoreticalHour; prodDenominator += r.laborHour; }
+      }
+    }
+  });
+  const overallProductivity = prodDenominator>0 ? fmt1(prodNumerator/prodDenominator*100) : null;
+
+  return { rows, lentOut, giaiLaoTotalHour: giaiLaoTotal/60,
+    totalQty, totalLaborHour, totalTheoreticalHour, overallProductivity, missingStdCount };
 }
 function viewTeamSummary(){
   const u = currentUser();
@@ -1732,13 +1781,15 @@ function viewTeamSummary(){
       <label style="margin:0;">Tổ:</label>
       <select id="tsTeamSelect">${DB.teams.map(t=>`<option value="${esc(t.name)}" ${t.name===scope?'selected':''}>${esc(t.name)}</option>`).join('')}</select>` : '';
 
-  const { rows, lentOut, giaiLaoTotalHour } = buildTeamSummaryRows(scope, window._tsFrom, window._tsTo);
+  const { rows, lentOut, giaiLaoTotalHour, totalQty, totalLaborHour, totalTheoreticalHour, overallProductivity, missingStdCount } =
+    buildTeamSummaryRows(scope, window._tsFrom, window._tsTo);
 
   return renderShell(`
     <div class="section-title" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
       <span>TỔNG HỢP TỔ: ${esc(scope)}</span>
     </div>
     <div class="banner">Bảng này chỉ mang tính <b>tham khảo</b> để đỡ phải tự tính thời gian/năng suất — số lượng SẢN PHẨM ở đây <b>chưa chắc đã đúng</b>, Tổ trưởng vẫn cần đối chiếu với số liệu nhập kho trong ngày trước khi ghi vào bảng riêng của mình. Thời gian gián tiếp (kể cả Giải lao) luôn được liệt kê nhưng KHÔNG tính vào Năng suất.</div>
+    ${missingStdCount>0? `<div class="banner" style="border-color:#fcd34d;background:#fffbeb;color:#92400e;">⚠️ ${missingStdCount} dòng Mã TP <b>chưa có TG chuẩn</b> trong bảng "TG Chuẩn SP" — các dòng này KHÔNG được tính vào "Năng suất Tổ (tổng)" bên dưới (xem thẻ vàng "Chưa có TG chuẩn" trong bảng chi tiết).</div>` : ''}
     <div class="toolbar">
       <div class="btnlist" style="gap:6px;">
         <button data-action="tsSetPreset" data-val="today" class="${window._tsPreset==='today'?'active':''}" style="min-height:38px;padding:8px 14px;">Hôm nay</button>
@@ -1751,6 +1802,18 @@ function viewTeamSummary(){
       <label style="margin:0;">Đến:</label><input type="date" id="tsTo" value="${window._tsTo}">
       <button class="btn btn-outline btn-sm" data-action="applyTeamSummary">Lọc</button>` : ''}
       ${teamSelectHtml}
+      <button class="btn btn-outline btn-sm" data-action="exportTeamSummary">Xuất Excel (.csv)</button>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box blue">${kpiIcon('box')}</div>
+        <div><div class="l">Tổng SL (Trực tiếp)</div><div class="v">${totalQty}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box emerald">${kpiIcon('split')}</div>
+        <div><div class="l">Tổng TG nhân công</div><div class="v">${fmt2(totalLaborHour)}h</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box amber">${kpiIcon('alert')}</div>
+        <div><div class="l">Tổng TG lý thuyết</div><div class="v">${fmt2(totalTheoreticalHour)}h</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box violet">${kpiIcon('target')}</div>
+        <div><div class="l">Năng suất Tổ (tổng)</div><div class="v">${overallProductivity!==null?overallProductivity+'%':'—'}</div></div></div></div>
     </div>
 
     <div class="card">
@@ -1758,31 +1821,42 @@ function viewTeamSummary(){
       ${rows.length? `<div class="tablewrap"><table><thead><tr>
         <th>Ngày</th><th>Mã TP</th><th>Tên TP</th><th>Loại</th><th>SL</th>
         <th>TG chuẩn (giờ)</th><th>TG lý thuyết (giờ)</th><th>TG nhân công (giờ)</th>
-        <th>TG nhận hỗ trợ trực (giờ)</th><th>TG nhận hỗ trợ gián (giờ)</th><th>Nhận hỗ trợ từ Tổ</th>
+        <th>TG nhận hỗ trợ trực tiếp (giờ)</th><th>TG nhận hỗ trợ gián tiếp (giờ)</th><th>Nhận hỗ trợ từ Tổ</th>
         <th>Năng suất</th><th>Ghi chú</th>
       </tr></thead><tbody>
       ${rows.map(r=>`<tr>
         <td>${fmtDateVN(r.date)}</td>
         <td>${esc(r.maTP)||'—'}</td><td>${esc(r.tenTP)||'—'}</td><td>${esc(r.congDoanLabel)}</td>
         <td>${r.workType==='Direct'?r.qty:'—'}</td>
-        <td>${r.stdHour!==null?fmt3(r.stdHour):'—'}</td>
-        <td>${r.theoreticalHour!==null?fmt1(r.theoreticalHour):'—'}</td>
-        <td>${fmt1(r.laborHour)}</td>
-        <td>${r.supportDirectHour>0?fmt1(r.supportDirectHour):'—'}</td>
-        <td>${r.supportIndirectHour>0?fmt1(r.supportIndirectHour):'—'}</td>
+        <td>${r.stdHour!==null?fmt2(r.stdHour):'—'}</td>
+        <td>${r.theoreticalHour!==null?fmt2(r.theoreticalHour):'—'}</td>
+        <td>${fmt2(r.laborHour)}</td>
+        <td>${r.supportDirectHour>0?fmt2(r.supportDirectHour):'—'}</td>
+        <td>${r.supportIndirectHour>0?fmt2(r.supportIndirectHour):'—'}</td>
         <td>${r.supportTeams.length?esc(r.supportTeams.join(', ')):'—'}</td>
         <td>${r.productivity!==null?`<span class="pill ${productivityClass(r.productivity)}">${r.productivity}%</span>`:'—'}</td>
-        <td>${esc(r.note)}</td>
+        <td>${r.note?`<span class="pill amber">${esc(r.note)}</span>`:''}</td>
       </tr>`).join('')}
-      </tbody></table></div>
-      <div class="hint" style="margin-top:8px;">Tổng thời gian Giải lao (10:00–10:10 và 15:00–15:10) trong khoảng đang xem: <b>${giaiLaoTotalHour} giờ</b> (đã liệt kê ở dòng "Giải lao/休憩" mỗi ngày, không tính vào Năng suất).</div>`
+      </tbody>
+      <tfoot><tr style="font-weight:700;background:#f8fafc;">
+        <td colspan="4" style="text-align:right;">TỔNG (${esc(window._tsFrom)} → ${esc(window._tsTo)})</td>
+        <td>${totalQty}</td>
+        <td>—</td>
+        <td>${fmt2(totalTheoreticalHour)}</td>
+        <td>${fmt2(totalLaborHour)}</td>
+        <td colspan="3">—</td>
+        <td>${overallProductivity!==null?`<span class="pill ${productivityClass(overallProductivity)}">${overallProductivity}%</span>`:'—'}</td>
+        <td>—</td>
+      </tr></tfoot>
+      </table></div>
+      <div class="hint" style="margin-top:8px;">Tổng thời gian Giải lao (10:00–10:10 và 15:00–15:10) trong khoảng đang xem: <b>${fmt2(giaiLaoTotalHour)} giờ</b> (đã liệt kê ở dòng "Giải lao/休憩" mỗi ngày, không tính vào Năng suất). "Năng suất Tổ (tổng)" chỉ gộp các Mã TP đã có TG chuẩn.</div>`
       : '<div class="empty">Chưa có dữ liệu trong khoảng thời gian này</div>'}
     </div>
 
     <div class="card">
       <div class="section-title">Đã cho Tổ khác mượn người (tham khảo — không tính vào Năng suất Tổ này)</div>
       ${lentOut.length? `<div class="tablewrap"><table><thead><tr><th>Ngày</th><th>Tổ nhận hỗ trợ</th><th>Tổng giờ</th><th>Mã hàng/Việc</th></tr></thead>
-      <tbody>${lentOut.map(x=>`<tr><td>${fmtDateVN(x.date)}</td><td>${esc(x.team)}</td><td>${x.hours}</td><td>${esc(x.items)}</td></tr>`).join('')}</tbody></table></div>`
+      <tbody>${lentOut.map(x=>`<tr><td>${fmtDateVN(x.date)}</td><td>${esc(x.team)}</td><td>${fmt2(x.hours)}</td><td>${esc(x.items)}</td></tr>`).join('')}</tbody></table></div>`
       : '<div class="empty">Không có.</div>'}
     </div>
   `);
@@ -2700,28 +2774,42 @@ function attachLoginEvents(){
     const pw = document.getElementById('loginPw').value;
     const remember = document.getElementById('loginRemember').checked;
     const errBox = document.getElementById('loginErr');
-    let hash;
-    try { hash = await sha256(pw); }
-    catch(err){
-      errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Không thể mã hoá mật khẩu (Web Crypto API không khả dụng trong ngữ cảnh hiện tại — thử mở file này qua trình duyệt Chrome/Edge/Firefox bản mới, tránh trình duyệt trong app khác).</div>';
-      return;
-    }
-    // Thu dang nhap qua API dung chung (Google Sheets) truoc — neu API_URL chua cau hinh hoac loi mang, apiCall tra ve null.
-    const apiResult = await apiCall('login', { maNV, passwordHash: hash });
-    if (apiResult){
-      if (!apiResult.ok){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${esc(apiResult.error||'Đăng nhập thất bại.')}</div>`; return; }
-      await syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash });
+    const btn = document.getElementById('btnLogin');
+    // Phan hoi ngay khi bam — tranh cam giac "bam ma khong thay gi" trong luc cho apiCall() phan hoi mang
+    // (co the mat vai giay neu mang factory cham/API Apps Script "danh thuc" lai sau khi ngu). Luon go lai nut
+    // (finally) du thanh cong/that bai/loi, tranh ket ket qua nut bi khoa vinh vien neu co loi bat ngo.
+    btn.disabled = true;
+    const originalBtnText = btn.textContent;
+    btn.textContent = 'Đang đăng nhập...';
+    try {
+      let hash;
+      try { hash = await sha256(pw); }
+      catch(err){
+        errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Không thể mã hoá mật khẩu (Web Crypto API không khả dụng trong ngữ cảnh hiện tại — thử mở file này qua trình duyệt Chrome/Edge/Firefox bản mới, tránh trình duyệt trong app khác).</div>';
+        return;
+      }
+      // Thu dang nhap qua API dung chung (Google Sheets) truoc — neu API_URL chua cau hinh hoac loi mang, apiCall tra ve null.
+      const apiResult = await apiCall('login', { maNV, passwordHash: hash });
+      if (apiResult){
+        if (!apiResult.ok){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${esc(apiResult.error||'Đăng nhập thất bại.')}</div>`; return; }
+        await syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash });
+        login(maNV, remember, hash);
+        route = 'dashboard'; render();
+        return;
+      }
+      // Fallback: che do cuc bo (chua deploy API dung chung, hoac API dang loi) - giu dung hanh vi cu, khong doi trai nghiem.
+      const emp = DB.employees.find(e=>e.maNV===maNV && e.active);
+      if (!emp){ errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Mã nhân viên không tồn tại hoặc đã bị khóa.</div>'; return; }
+      if (hash !== emp.passwordHash){ errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Sai mật khẩu.</div>'; return; }
       login(maNV, remember, hash);
-      route = 'dashboard'; render();
-      return;
+      route = 'dashboard';
+      render();
+    } finally {
+      // Sau khi dang nhap thanh cong, render() da ve lai man hinh khac (khong con nut nay) nen getElementById
+      // se tra ve null — kiem tra lai truoc khi dong, tranh loi.
+      const btnAfter = document.getElementById('btnLogin');
+      if (btnAfter){ btnAfter.disabled = false; btnAfter.textContent = originalBtnText; }
     }
-    // Fallback: che do cuc bo (chua deploy API dung chung, hoac API dang loi) - giu dung hanh vi cu, khong doi trai nghiem.
-    const emp = DB.employees.find(e=>e.maNV===maNV && e.active);
-    if (!emp){ errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Mã nhân viên không tồn tại hoặc đã bị khóa.</div>'; return; }
-    if (hash !== emp.passwordHash){ errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Sai mật khẩu.</div>'; return; }
-    login(maNV, remember, hash);
-    route = 'dashboard';
-    render();
   });
   const resetLink = document.getElementById('resetToDefault');
   if (resetLink) resetLink.addEventListener('click', (ev)=>{
@@ -2865,6 +2953,7 @@ async function handleAction(action, val, id){
       render(); return;
     }
     case 'exportTeamRecords': exportRecords(currentTeamDashRows()); return;
+    case 'exportTeamSummary': exportTeamSummary(); return;
     case 'applyTeamSummary': window._tsFrom=document.getElementById('tsFrom').value; window._tsTo=document.getElementById('tsTo').value; render(); return;
     case 'tsSetPreset': {
       window._tsPreset = val;
@@ -3271,6 +3360,33 @@ function exportRecords(rows){
   const blob = new Blob(['\uFEFF'+lines.join('\n')], {type:'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download = 'work-records-'+todayStr()+'.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+/* Xuat CSV rieng cho bang Tong hop To \u2014 khac exportRecords() (xuat tho tung Work Record): bang nay xuat DUNG
+   cac dong da gop theo Ngay+Ma TP nhu hien thi tren man hinh, kem 1 dong TONG cuoi cung, de Leader luu lai/gui
+   bao cao ma khong can tu tinh lai. */
+function exportTeamSummary(){
+  const u = currentUser();
+  const isAdmin = u.role==='Admin';
+  const scope = isAdmin ? (window._tsTeam || (DB.teams[0] && DB.teams[0].name) || null) : teamLedBy(u.maNV);
+  if (!scope) return;
+  const from = window._tsFrom || todayStr(), to = window._tsTo || todayStr();
+  const { rows, totalQty, totalLaborHour, totalTheoreticalHour, overallProductivity } = buildTeamSummaryRows(scope, from, to);
+  const headers = ['Ngay','To','MaTP','TenTP','Loai','SoLuong','TGChuan_gio','TGLyThuyet_gio','TGNhanCong_gio',
+    'TGNhanHoTroTrucTiep_gio','TGNhanHoTroGianTiep_gio','NhanHoTroTuTo','NangSuat','GhiChu'];
+  const lines = [headers.join(',')];
+  rows.forEach(r=>{
+    lines.push([r.date, scope, r.maTP, r.tenTP, r.congDoanLabel, r.workType==='Direct'?r.qty:0,
+      r.stdHour!==null?fmt2(r.stdHour):'', r.theoreticalHour!==null?fmt2(r.theoreticalHour):'',
+      fmt2(r.laborHour), r.supportDirectHour>0?fmt2(r.supportDirectHour):'', r.supportIndirectHour>0?fmt2(r.supportIndirectHour):'',
+      r.supportTeams.join('; '), r.productivity!==null?r.productivity:'', r.note||''
+    ].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+  });
+  lines.push(['T\u1ED4NG', scope, '', '', '', totalQty, '', fmt2(totalTheoreticalHour), fmt2(totalLaborHour), '', '', '',
+    overallProductivity!==null?overallProductivity:'', ''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+  const blob = new Blob(['\uFEFF'+lines.join('\n')], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download = 'tong-hop-to-'+scope+'-'+todayStr()+'.csv'; a.click();
   URL.revokeObjectURL(url);
 }
 
