@@ -441,6 +441,12 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbz2oq3lzaXoKpjKwXLKuHL7
    (Apps Script vẫn đọc đúng JSON qua e.postData.contents bất kể Content-Type khai báo là gì) — đây là cách
    né lỗi CORS kinh điển khi gọi Apps Script Web App. */
 function sleepMs(ms){ return new Promise(resolve=>setTimeout(resolve, ms)); }
+/* THEO DOI TRANG THAI API THAT (khong gia lap) — chi dung de HIEN THI o "System Health" (Admin Control
+   Center), KHONG anh huong bat ky logic goi API/queue/rollback nao o duoi. true = lan goi gan nhat CHAM
+   DUOC toi Server (du server tra ve ok:true hay ok:false deu la "chua tung ket noi duoc" khac nhau — ok:false
+   la loi nghiep vu, van la "Online"); false = that bai ket noi (mat mang/CORS/server loi); null = phien nay
+   CHUA tung goi API lan nao, nen KHONG THE xac dinh — hien thi "Không xác định", khong duoc gia lap Online. */
+let lastApiOk = null;
 /* Neu Server tra ve { busy:true } (LockService het thoi gian cho vi qua nhieu nguoi ghi cung luc — tam thoi,
    KHONG phai bi tu choi that su), tu dong thu lai vai lan truoc khi tra ve cho noi goi — tranh nguoi dung phai
    tu bam lai thu cong hoac (te hon) mat thao tac vi apiCallOrQueue coi day la "bi tu choi", khong dua vao hang doi. */
@@ -449,14 +455,16 @@ async function apiCall(action, payload, _retriesLeft){
   if (_retriesLeft===undefined) _retriesLeft = 2;
   try {
     const res = await fetch(API_URL, { method:'POST', body: JSON.stringify(Object.assign({action}, payload)) });
-    if (!res.ok) return null;
+    if (!res.ok) { lastApiOk = false; return null; }
     const result = await res.json();
     if (result && result.busy && _retriesLeft>0){
       await sleepMs(1200);
       return apiCall(action, payload, _retriesLeft-1);
     }
+    lastApiOk = true; // cham duoc toi Server va nhan duoc JSON hop le (bat ke ok:true/false ve nghiep vu)
     return result;
   } catch(err){
+    lastApiOk = false;
     return null;
   }
 }
@@ -514,6 +522,12 @@ window.addEventListener('online', async ()=>{
   }
 });
 
+/* THOI DIEM DONG BO THANH CONG GAN NHAT (that, khong gia lap) — chi dung de hien thi o System Health.
+   Luu localStorage (khong phai bien tam) de con giu duoc qua lan tai lai trang. */
+const CONDOR_LASTSYNC_KEY = 'condor_last_sync_v1';
+function getLastSyncAt(){ const v = localStorage.getItem(CONDOR_LASTSYNC_KEY); return v ? Number(v) : null; }
+function setLastSyncAt(ts){ localStorage.setItem(CONDOR_LASTSYNC_KEY, String(ts)); }
+
 /* Sau khi đăng nhập thành công qua API, đồng bộ lại DB.employees/DB.teams từ Google Sheets (nguồn dùng chung),
    thay cho dữ liệu cục bộ cũ — để mọi người cùng thấy đúng 1 danh sách. */
 async function syncEmployeesAndTeamsFromAPI(session){
@@ -525,6 +539,7 @@ async function syncEmployeesAndTeamsFromAPI(session){
   if (catalogResult && catalogResult.ok) DB.workCatalog = catalogResult.catalog;
   const workRecordResult = await apiCall('listWorkRecords', { session });
   if (workRecordResult && workRecordResult.ok) DB.workRecords = workRecordResult.workRecords;
+  if (empResult && empResult.ok) setLastSyncAt(Date.now()); // coi "dong bo thanh cong" = it nhat lay duoc danh sach Nhan vien moi nhat
   saveDB();
 }
 /* Nut "Lam moi du lieu": GUI HANG DOI dang cho (neu co) truoc, roi dong bo lai Nhan vien/To/Catalog tu Google Sheets,
@@ -812,13 +827,13 @@ function initAdminDashboardChart(retryCount){
     return;
   }
   if (adminDashboardChartInstance){ adminDashboardChartInstance.destroy(); adminDashboardChartInstance = null; }
-  const { directTime, indirectTime } = getAdminDirectIndirectSplit();
+  const stats = getAdminSystemStats();
   try {
     adminDashboardChartInstance = new Chart(canvas, {
       type: 'doughnut',
       data: {
-        labels: ['Trực tiếp', 'Gián tiếp'],
-        datasets: [{ data: [directTime, indirectTime], backgroundColor: ['#10b981', '#f59e0b'], borderWidth: 0 }],
+        labels: ['Đã duyệt', 'Chờ duyệt', 'Từ chối'],
+        datasets: [{ data: [stats.approvedCount, stats.pendingCount, stats.rejectedCount], backgroundColor: ['#10b981', '#f59e0b', '#e11d48'], borderWidth: 0 }],
       },
       options: {
         responsive: true, maintainAspectRatio: false, cutout: '70%',
@@ -892,91 +907,131 @@ function viewDashboard(){
 }
 function fmtDateVN(s){ const [y,m,d]=s.split('-'); return `${d}/${m}/${y}`; }
 
-/* ---------------- Views: ADMIN EXECUTIVE DASHBOARD ---------------- */
-/* Tổng hợp Direct/Indirect Time TOÀN NHÀ MÁY (không lọc theo maNV như Dashboard nhân viên) trong đúng
-   khoảng Tháng/Ngày đang xem (dùng chung state dashboardMode/dashboardMonthValue/dashboardDayValue với
-   Dashboard nhân viên — Admin và Employee/Leader không bao giờ cùng xem 1 phiên nên dùng chung state là an
-   toàn). Tách thành hàm riêng để cả viewAdminDashboard() (vẽ số liệu) và initAdminDashboardChart() (vẽ biểu
-   đồ) đều lấy từ ĐÚNG 1 NGUỒN, tránh 2 nơi tính lệch nhau. Rejected không tính, khớp quy ước productivityForRows(). */
-function getAdminDirectIndirectSplit(){
-  const isMonth = dashboardMode==='month';
-  const filterValue = isMonth ? dashboardMonthValue : dashboardDayValue;
-  const rows = DB.workRecords.filter(r=> r.status!=='Rejected' && (isMonth ? r.date.startsWith(filterValue) : r.date===filterValue));
-  const directTime = rows.filter(r=>r.workType==='Direct').reduce((s,r)=>s+r.actualTime,0);
-  const indirectTime = rows.filter(r=>r.workType==='Indirect').reduce((s,r)=>s+r.actualTime,0);
-  return { directTime, indirectTime };
+/* ---------------- Views: ADMIN CONTROL CENTER ---------------- */
+/* Tổng hợp số liệu TOÀN HỆ THỐNG (ALL-TIME, không lọc theo Tháng/Ngày) cho Admin Control Center — đúng vai
+   trò "System Control Center" (khác hẳn Dashboard cá nhân theo kỳ của Employee/Leader). Tách hàm riêng để
+   cả viewAdminDashboard() (vẽ số liệu) và initAdminDashboardChart() (vẽ biểu đồ) lấy từ ĐÚNG 1 NGUỒN. Rejected
+   vẫn được ĐẾM ở đây (Data Status cần biết cả Rejected) nhưng KHÔNG được tính vào Năng suất (dùng
+   productivityForRows() đã tự loại Rejected — khớp quy ước toàn hệ thống). */
+function getAdminSystemStats(){
+  const employees = DB.employees.filter(e=>e.role!=='Admin');
+  const teams = DB.teams;
+  const workRecords = DB.workRecords;
+  const approvedCount = workRecords.filter(r=>r.status==='Approved').length;
+  const pendingCount = workRecords.filter(r=>r.status==='Pending').length;
+  const rejectedCount = workRecords.filter(r=>r.status==='Rejected').length;
+  return { employees, teams, workRecords, approvedCount, pendingCount, rejectedCount };
+}
+/* Bảng "Team Productivity Overview" — mỗi dòng 1 Tổ, Năng suất BẮT BUỘC dùng công thức gộp
+   productivityForRows() (SUM(TGChuan*SL)/SUM(ActualTime)*100), KHÔNG dùng trung bình cộng. */
+function getAdminTeamOverviewRows(){
+  const today = todayStr();
+  return DB.teams.map(t=>{
+    const roster = DB.employees.filter(e=> e.role!=='Admin' && e.employeeTeam===t.name);
+    const todaySubmitted = new Set(DB.workRecords.filter(r=> r.workingTeam===t.name && r.date===today).map(r=>r.maNV));
+    const submitted = roster.filter(e=>todaySubmitted.has(e.maNV)).length;
+    const teamDirectRows = DB.workRecords.filter(r=> r.workingTeam===t.name && r.workType==='Direct' && r.status!=='Rejected');
+    const productivity = productivityForRows(teamDirectRows);
+    const pending = DB.workRecords.filter(r=> r.workingTeam===t.name && r.status==='Pending').length;
+    return { name: t.name, employeeCount: roster.length, submitted, missing: roster.length-submitted, productivity, pending };
+  });
+}
+/* Data Quality — chỉ hiển thị vấn đề THẬT trên dữ liệu hiện có, không bao giờ bịa số. "Duplicate Records":
+   nhóm theo maNV+ngày+giờ bắt đầu/kết thúc+Tổ làm việc+công đoạn+mã TP — nhiều hơn 1 bản ghi trùng hệt các
+   trường này (thường do Import lặp) được tính là dư thừa. Đây CHỈ là số liệu hiển thị (read-only), không tự
+   động sửa/xoá gì — khớp nguyên tắc "phát hiện lỗi thì báo, không tự sửa" của nhiệm vụ. */
+function getAdminDataQuality(){
+  const now = Date.now();
+  const missingStdTime = DB.workRecords.filter(r=>r.needsStandardTime).length;
+  const groups = {};
+  DB.workRecords.forEach(r=>{
+    const key = [r.maNV,r.date,r.start,r.end,r.workingTeam,r.congDoan,r.maTP].join('|');
+    groups[key] = (groups[key]||0)+1;
+  });
+  let duplicateRecords = 0;
+  Object.values(groups).forEach(c=>{ if (c>1) duplicateRecords += (c-1); });
+  const employeesWithoutTeam = DB.employees.filter(e=> e.role!=='Admin' && !e.employeeTeam).length;
+  const pendingOver24h = DB.workRecords.filter(r=> r.status==='Pending' && r.createdAt && (now-r.createdAt) > 24*3600*1000).length;
+  return { missingStdTime, duplicateRecords, employeesWithoutTeam, pendingOver24h };
 }
 function viewAdminDashboard(){
-  const isMonth = dashboardMode==='month';
-  const filterValue = isMonth ? dashboardMonthValue : dashboardDayValue;
-  const rowsInRange = DB.workRecords.filter(r=> isMonth ? r.date.startsWith(filterValue) : r.date===filterValue);
-  const kpiRows = rowsInRange.filter(r=>r.status!=='Rejected');
-  const direct = kpiRows.filter(r=>r.workType==='Direct');
-  const qty = direct.reduce((s,r)=>s+r.quantity,0);
-  const prod = productivityForRows(direct);
-  const { directTime, indirectTime } = getAdminDirectIndirectSplit();
-  const totalTime = directTime + indirectTime;
+  const stats = getAdminSystemStats();
+  const teamRows = getAdminTeamOverviewRows();
+  const dq = getAdminDataQuality();
+  const dqIssues = [];
+  if (dq.missingStdTime>0) dqIssues.push(`⚠ Thiếu Thời gian chuẩn: ${dq.missingStdTime}`);
+  if (dq.duplicateRecords>0) dqIssues.push(`⚠ Bản ghi trùng lặp: ${dq.duplicateRecords}`);
+  if (dq.employeesWithoutTeam>0) dqIssues.push(`⚠ Nhân viên chưa có Tổ: ${dq.employeesWithoutTeam}`);
+  if (dq.pendingOver24h>0) dqIssues.push(`⚠ Chờ duyệt quá 24 giờ: ${dq.pendingOver24h}`);
 
-  // "Cần xử lý": Pending (chờ duyệt) và needsStandardTime (thiếu định mức TGC, do Import bỏ qua trước đó) —
-  // tính trên TOÀN BỘ dữ liệu (không giới hạn theo bộ lọc Tháng/Ngày đang xem), vì đây là việc Admin cần xử
-  // lý NGAY bất kể đang xem khoảng thời gian nào.
-  const pendingCount = DB.workRecords.filter(r=>r.status==='Pending').length;
-  const needsTGCCount = DB.workRecords.filter(r=>r.needsStandardTime).length;
-
-  const title = isMonth
-    ? `Tổng quan Nhà máy — Tháng ${filterValue.slice(5,7)}/${filterValue.slice(0,4)}`
-    : `Tổng quan Nhà máy — Ngày ${fmtDateVN(filterValue)}`;
-
-  // 10 Work Record mới nhất (theo thời điểm tạo) trên TOÀN HỆ THỐNG, không giới hạn theo bộ lọc Tháng/Ngày
-  // ở trên — để Admin luôn thấy được hoạt động gần nhất, kể cả khi đang xem lại 1 tháng trước.
-  const latestRows = DB.workRecords.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)).slice(0,10);
+  // System Health — chỉ hiển thị trạng thái THẬT (lastApiOk/getLastSyncAt lấy từ apiCall()/syncEmployeesAndTeamsFromAPI()
+  // thực tế đã gọi trong phiên này), KHÔNG BAO GIỜ giả lập "Online/Đã kết nối" khi chưa xác định được.
+  const apiStatus = lastApiOk===true ? 'Online' : (lastApiOk===false ? 'Offline' : 'Chưa xác định');
+  const apiStatusClass = lastApiOk===true ? 'go' : (lastApiOk===false ? 'warn' : 'na');
+  const lastSyncAt = getLastSyncAt();
+  const lastSyncLabel = lastSyncAt ? new Date(lastSyncAt).toLocaleString('vi-VN') : 'Chưa đồng bộ lần nào trong phiên này';
+  const syncQueueLen = getSyncQueue().length;
+  const localDbLabel = DB ? 'Sẵn sàng' : 'Không xác định';
 
   return renderShell(`
     <div class="section-title" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
-      <span>${esc(title.toUpperCase())}</span>
-      <div class="toolbar" style="margin:0;">
-        <div class="btnlist" style="gap:6px;">
-          <button data-action="dashboardSetMode" data-val="month" class="${isMonth?'active':''}" style="min-height:38px;padding:8px 16px;">Tháng</button>
-          <button data-action="dashboardSetMode" data-val="day" class="${!isMonth?'active':''}" style="min-height:38px;padding:8px 16px;">Ngày</button>
-        </div>
-        ${isMonth
-          ? `<input type="month" id="dashboardMonthInput" value="${dashboardMonthValue}">`
-          : `<input type="date" id="dashboardDayInput" value="${dashboardDayValue}">`}
-      </div>
+      <span>TỔNG QUAN HỆ THỐNG</span>
+      <span style="font-weight:600;color:#64748b;text-transform:none;letter-spacing:0;font-size:12.5px;">Ngày: ${esc(fmtDateVN(todayStr()))} · Đồng bộ gần nhất: ${esc(lastSyncLabel)}</span>
     </div>
 
-    <!-- a. Khối Thẻ KPI - Grid 4 cột (2 cột trên di động, xem class .kpis) -->
     <div class="kpis">
-      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box emerald">${kpiIcon('target')}</div>
-        <div><div class="l">Năng suất TB Nhà máy</div><div class="v">${prod!==null?prod+'%':'—'}</div></div></div></div>
-      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box blue">${kpiIcon('clock')}</div>
-        <div><div class="l">Tổng giờ sản xuất</div><div class="v">${fmtHours(totalTime)}</div></div></div></div>
-      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box amber">${kpiIcon('box')}</div>
-        <div><div class="l">Tổng sản lượng</div><div class="v">${qty}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box blue">${kpiIcon('split')}</div>
+        <div><div class="l">Tổng nhân viên</div><div class="v">${stats.employees.length}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box emerald">${kpiIcon('box')}</div>
+        <div><div class="l">Tổng số Tổ</div><div class="v">${stats.teams.length}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box violet">${kpiIcon('clock')}</div>
+        <div><div class="l">Work Record</div><div class="v">${stats.workRecords.length}</div></div></div></div>
       <div class="kpi" style="cursor:pointer;" data-route="approve" title="Bấm để mở danh sách Chờ duyệt">
-        <div class="kpi-icon-row"><div class="kpi-icon-box violet">${kpiIcon('alert')}</div>
-          <div style="min-width:0;"><div class="l">Cần xử lý</div>
-            <div class="v" style="font-size:16.5px;line-height:1.3;">${pendingCount} chờ duyệt${needsTGCCount?`<br>${needsTGCCount} thiếu TGC`:''}</div>
-          </div></div></div>
+        <div class="kpi-icon-row"><div class="kpi-icon-box amber">${kpiIcon('alert')}</div>
+        <div><div class="l">Chờ duyệt</div><div class="v">${stats.pendingCount}</div></div></div></div>
     </div>
 
-    <!-- b. Biểu đồ: tỷ lệ Thời gian Trực tiếp / Gián tiếp toàn nhà máy trong khoảng đang xem -->
     <div class="card">
-      <div class="section-title">Tỷ lệ Thời gian Trực tiếp / Gián tiếp ${isMonth?'trong Tháng':'trong Ngày'}</div>
-      ${totalTime>0 ? `
+      <div class="section-title">Trạng thái Dữ liệu (toàn hệ thống)</div>
+      ${stats.workRecords.length>0 ? `
       <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
-        <div style="width:170px;height:170px;position:relative;flex:none;"><canvas id="adminDashboardChart"></canvas></div>
-        <div style="flex:1;min-width:160px;">
-          <div class="split-bar-legend" style="font-size:13.5px;margin-bottom:8px;"><span class="a">● Trực tiếp — ${fmtHours(directTime)} giờ</span></div>
-          <div class="split-bar-legend" style="font-size:13.5px;"><span class="b">● Gián tiếp — ${fmtHours(indirectTime)} giờ</span></div>
+        <div style="width:150px;height:150px;position:relative;flex:none;"><canvas id="adminDashboardChart"></canvas></div>
+        <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;color:#10b981;">● Đã duyệt</span><span style="font-weight:700;">${stats.approvedCount}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;color:#f59e0b;">● Chờ duyệt</span><span style="font-weight:700;">${stats.pendingCount}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;color:#e11d48;">● Từ chối</span><span style="font-weight:700;">${stats.rejectedCount}</span></div>
         </div>
-      </div>` : '<div class="empty">Chưa có dữ liệu trong khoảng thời gian này.</div>'}
+      </div>` : '<div class="empty">Chưa có dữ liệu Work Record nào trong hệ thống.</div>'}
     </div>
 
-    <!-- c. Bảng: Work Record mới nhất -->
     <div class="card">
-      <div class="section-title">Work Record mới nhất (10 gần đây nhất, toàn hệ thống)</div>
-      ${renderRecordTable(latestRows, {showToolbar:false})}
+      <div class="section-title">Năng suất theo Tổ (Team Productivity Overview)</div>
+      ${teamRows.length? `<div class="tablewrap"><table><thead><tr>
+        <th>Tổ</th><th>Nhân viên</th><th>Đã nộp (hôm nay)</th><th>Chưa nộp (hôm nay)</th><th>Năng suất</th><th>Chờ duyệt</th>
+      </tr></thead><tbody>
+      ${teamRows.map(t=>`<tr>
+        <td>${esc(t.name)}</td><td>${t.employeeCount}</td><td>${t.submitted}</td><td>${t.missing}</td>
+        <td><span class="pill ${productivityClass(t.productivity)}">${t.productivity!==null?t.productivity+'%':'Chưa có dữ liệu'}</span></td>
+        <td>${t.pending}</td>
+      </tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty">Chưa có Tổ nào trong hệ thống — vào Quản trị › Tổ để thêm mới.</div>'}
+    </div>
+
+    <div class="card">
+      <div class="section-title">Chất lượng Dữ liệu</div>
+      ${dqIssues.length? `<div style="display:flex;flex-direction:column;gap:8px;">
+        ${dqIssues.map(m=>`<div style="padding:9px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;font-size:13.5px;font-weight:600;color:#92400e;">${esc(m)}</div>`).join('')}
+      </div>` : `<div style="padding:10px 4px;color:#10b981;font-weight:700;font-size:13.5px;">✓ Không phát hiện vấn đề chất lượng dữ liệu nào</div>`}
+    </div>
+
+    <div class="card">
+      <div class="section-title">Tình trạng Hệ thống (System Health)</div>
+      <div class="kpis" style="margin-bottom:0;">
+        <div class="kpi"><div class="l">API</div><div class="v" style="font-size:17px;"><span class="pill ${apiStatusClass}">${esc(apiStatus)}</span></div></div>
+        <div class="kpi"><div class="l">Đồng bộ gần nhất</div><div class="v" style="font-size:14px;">${esc(lastSyncLabel)}</div></div>
+        <div class="kpi"><div class="l">Hàng đợi đồng bộ</div><div class="v">${syncQueueLen}</div></div>
+        <div class="kpi"><div class="l">Cơ sở dữ liệu Local</div><div class="v" style="font-size:17px;">${esc(localDbLabel)}</div></div>
+      </div>
     </div>
   `);
 }
@@ -1308,15 +1363,87 @@ function getPermittedTeams(maNV){
   return DB.teams.map(t=>t.name);
 }
 
-/* ---------------- Views: TEAM DASHBOARD ---------------- */
+/* ---------------- Views: TEAM DASHBOARD (Leader) ---------------- */
+/* Quy đổi 1 preset khoảng thời gian ('today'|'week'|'month') thành {from,to} — 'custom' trả về null (giữ
+   nguyên window._tdFrom/_tdTo hiện tại do người dùng tự chọn qua 2 ô ngày). */
+function teamDashPeriodRange(preset){
+  const today = todayStr();
+  if (preset==='today') return { from: today, to: today };
+  if (preset==='week'){
+    const d = new Date(today+'T00:00:00');
+    const day = d.getDay(); // 0=Chu nhat
+    const diffToMon = (day===0?6:day-1);
+    const mon = new Date(d); mon.setDate(d.getDate()-diffToMon);
+    return { from: mon.toISOString().slice(0,10), to: today };
+  }
+  if (preset==='month') return { from: monthStartStr(), to: today };
+  return null;
+}
+/* Dữ liệu cho biểu đồ "Biến động Năng suất Tổ theo Ngày" — mỗi điểm dùng ĐÚNG công thức gộp
+   productivityForRows() (SUM(TGChuan*SL)/SUM(ActualTime)*100) cho từng ngày trong khoảng lọc, KHÔNG bao
+   giờ trả về 0 cho ngày không có dữ liệu (trả null để Chart.js vẽ đứt đoạn — spanGaps:false). Giới hạn tối
+   đa 62 điểm để tránh biểu đồ quá dài khi Leader chọn khoảng thời gian rất rộng. */
+function getTeamProductivityTrendData(scope, fromStr, toStr){
+  const labels = [], data = [], ref100 = [];
+  let d = new Date(fromStr+'T00:00:00');
+  const end = new Date(toStr+'T00:00:00');
+  let guard = 0;
+  while (d<=end && guard<62){
+    const dateStr = d.toISOString().slice(0,10);
+    labels.push(dateStr.slice(5));
+    const dayRows = DB.workRecords.filter(r=> (scope? r.workingTeam===scope : true) && r.date===dateStr && r.workType==='Direct' && r.status!=='Rejected');
+    data.push(dayRows.length ? productivityForRows(dayRows) : null);
+    ref100.push(100);
+    d.setDate(d.getDate()+1);
+    guard++;
+  }
+  return { labels, data, ref100 };
+}
+let teamProductivityChartInstance = null;
+/* Cùng nguyên tắc vòng đời với initDashboardChart()/initAdminDashboardChart() — huỷ instance cũ trước khi vẽ
+   lại, tự no-op nếu không ở trang Team Dashboard (#teamProductivityChart không tồn tại). */
+function initTeamProductivityChart(retryCount){
+  retryCount = retryCount || 0;
+  const canvas = document.getElementById('teamProductivityChart');
+  if (!canvas) return;
+  if (typeof Chart==='undefined'){
+    if (retryCount < 5){ setTimeout(()=>initTeamProductivityChart(retryCount+1), 600); return; }
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">⚠️ Không tải được thư viện biểu đồ (Chart.js).</div>';
+    return;
+  }
+  if (teamProductivityChartInstance){ teamProductivityChartInstance.destroy(); teamProductivityChartInstance = null; }
+  const u = currentUser();
+  const scope = u.role==='Admin' ? null : teamLedBy(u.maNV);
+  const from = window._tdFrom || monthStartStr(), to = window._tdTo || todayStr();
+  const { labels, data, ref100 } = getTeamProductivityTrendData(scope, from, to);
+  try {
+    teamProductivityChartInstance = new Chart(canvas, {
+      type: 'line',
+      data: { labels, datasets: [
+        { label:'Năng suất Tổ (%)', data, borderColor:'#2563eb', backgroundColor:'rgba(37,99,235,0.08)', borderWidth:2, pointRadius:3, pointBackgroundColor:'#2563eb', tension:0.3, spanGaps:false, fill:true },
+        { label:'Mục tiêu 100%', data: ref100, borderColor:'#cbd5e1', borderWidth:1.5, borderDash:[6,4], pointRadius:0, fill:false },
+      ] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display:true, labels:{ boxWidth:12, font:{size:11} } } },
+        scales: { y: { beginAtZero:true, ticks:{ callback:v=>v+'%' } }, x: { grid:{ display:false } } }
+      }
+    });
+  } catch(err){
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">⚠️ Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
+  }
+}
 function viewTeamDash(){
   const u = currentUser();
   const isAdmin = u.role==='Admin';
   const scope = isAdmin ? null : teamLedBy(u.maNV);
   // Mac dinh xem tu DAU THANG hien tai den hom nay (khong phai chi 1 minh hom nay) — de vua vao Tab da co du
   // lieu ngay, khong bi hieu lam la "chua lam" chi vi hom nay chua nhap gi.
+  window._tdPreset = window._tdPreset || 'month';
   window._tdFrom = window._tdFrom || monthStartStr();
   window._tdTo = window._tdTo || todayStr();
+  const today = todayStr();
+
   const rows = DB.workRecords.filter(r=>{
     if (scope && r.workingTeam!==scope) return false;
     return r.date >= window._tdFrom && r.date <= window._tdTo;
@@ -1325,10 +1452,25 @@ function viewTeamDash(){
   // Rejected không tính vào KPI/Productivity (khớp quy ước của dailyProductivity()) — nhưng vẫn hiển thị
   // đầy đủ (kể cả Rejected) ở bảng "Chi tiết Work Record" bên dưới để Leader thấy được cần theo dõi gì.
   const kpiRows = rows.filter(r=>r.status!=='Rejected');
+  const directKpiRows = kpiRows.filter(r=>r.workType==='Direct');
 
-  // group by maNV+date for daily productivity, then avg per employee for the range
+  // Năng suất Tổ — BẮT BUỘC dùng công thức gộp productivityForRows() = SUM(TGChuan*SL)/SUM(ActualTime)*100
+  // trên toàn bộ Work Record Trực tiếp trong khoảng đang lọc, KHÔNG dùng trung bình cộng năng suất từng
+  // người (đã thay cho cách tính "avg" cũ, theo đúng yêu cầu thiết kế: xem ghi chú BUSINESS LOGIC bên dưới).
+  const teamProductivity = productivityForRows(directKpiRows);
+
+  // Nhân viên trong phạm vi (theo Tổ chính - employeeTeam), không tính tài khoản Admin — dùng cho 3 KPI
+  // "Nhân viên trong Tổ / Đã nộp / Chưa nộp". Riêng Data Entry & Missing Entry tính theo NGÀY HÔM NAY
+  // (không theo khoảng bộ lọc), để Leader luôn biết ngay hôm nay ai đã/chưa nộp bất kể đang xem báo cáo
+  // khoảng thời gian nào khác.
+  const teamRoster = DB.employees.filter(e=> e.role!=='Admin' && (scope? e.employeeTeam===scope : true));
+  const todayRows = DB.workRecords.filter(r=> (scope? r.workingTeam===scope : true) && r.date===today);
+  const submittedMaNVToday = new Set(todayRows.map(r=>r.maNV));
+  const missingEmployees = teamRoster.filter(e=> !submittedMaNVToday.has(e.maNV));
+
+  // Hiệu suất theo nhân viên (Employee Performance) — gộp theo nhân viên trong khoảng đang lọc.
   const byEmp = {};
-  kpiRows.filter(r=>r.workType==='Direct').forEach(r=>{
+  directKpiRows.forEach(r=>{
     const key = r.maNV;
     if (!byEmp[key]) byEmp[key] = {maNV:r.maNV, ten:r.ten, stdMin:0, actual:0, qty:0};
     byEmp[key].stdMin += r.thoiGianChuan*r.quantity;
@@ -1336,36 +1478,80 @@ function viewTeamDash(){
     byEmp[key].qty += r.quantity;
   });
   const empRows = Object.values(byEmp).map(e=>({...e, prod: e.actual>0? fmt1(e.stdMin/e.actual*100) : null}));
-  empRows.sort((a,b)=> (b.prod||0)-(a.prod||0));
+  empRows.sort((a,b)=> (b.prod??-1)-(a.prod??-1));
 
-  const avg = empRows.length? fmt1(empRows.reduce((s,e)=>s+(e.prod||0),0)/empRows.length) : null;
-  const totalDirect = kpiRows.filter(r=>r.workType==='Direct').reduce((s,r)=>s+r.actualTime,0);
-  const totalIndirect = kpiRows.filter(r=>r.workType==='Indirect').reduce((s,r)=>s+r.actualTime,0);
-
-  const maxProd = Math.max(100, ...empRows.map(e=>e.prod||0), 1);
+  // Chờ duyệt — ALL-TIME theo đúng phạm vi Tổ (khớp viewApprove()), không giới hạn theo bộ lọc ngày ở trên,
+  // vì đây là việc Leader cần xử lý ngay bất kể đang xem khoảng thời gian nào.
+  const pendingCount = DB.workRecords.filter(r=> r.status==='Pending' && (scope? r.workingTeam===scope : true)).length;
 
   return renderShell(`
+    <div class="section-title" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
+      <span>TỔ: ${esc(scope||'TẤT CẢ')} · ${esc(roleLabel(u.role).toUpperCase())}: ${esc(u.ten)}</span>
+    </div>
     <div class="toolbar">
+      <div class="btnlist" style="gap:6px;">
+        <button data-action="tdSetPreset" data-val="today" class="${window._tdPreset==='today'?'active':''}" style="min-height:38px;padding:8px 14px;">Hôm nay</button>
+        <button data-action="tdSetPreset" data-val="week" class="${window._tdPreset==='week'?'active':''}" style="min-height:38px;padding:8px 14px;">Tuần này</button>
+        <button data-action="tdSetPreset" data-val="month" class="${window._tdPreset==='month'?'active':''}" style="min-height:38px;padding:8px 14px;">Tháng này</button>
+        <button data-action="tdSetPreset" data-val="custom" class="${window._tdPreset==='custom'?'active':''}" style="min-height:38px;padding:8px 14px;">Tùy chọn</button>
+      </div>
+      ${window._tdPreset==='custom' ? `
       <label style="margin:0;">Từ:</label><input type="date" id="tdFrom" value="${window._tdFrom}">
       <label style="margin:0;">Đến:</label><input type="date" id="tdTo" value="${window._tdTo}">
-      <button class="btn btn-outline btn-sm" data-action="applyTeamDash">Lọc</button>
+      <button class="btn btn-outline btn-sm" data-action="applyTeamDash">Lọc</button>` : ''}
       <button class="btn btn-outline btn-sm" data-action="exportTeamRecords">Xuất Excel (.csv)</button>
     </div>
+
     <div class="kpis">
-      <div class="kpi"><div class="l">Năng suất TB Tổ</div><div class="v">${avg!==null?avg+'%':'—'}</div></div>
-      <div class="kpi"><div class="l">Tổng Direct Time</div><div class="v">${fmtHours(totalDirect)} giờ</div></div>
-      <div class="kpi"><div class="l">Tổng Indirect Time</div><div class="v">${fmtHours(totalIndirect)} giờ</div></div>
-      <div class="kpi"><div class="l">Số nhân viên</div><div class="v">${empRows.length}</div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box blue">${kpiIcon('split')}</div>
+        <div><div class="l">Nhân viên trong Tổ</div><div class="v">${teamRoster.length}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box emerald">${kpiIcon('box')}</div>
+        <div><div class="l">Đã nộp dữ liệu (hôm nay)</div><div class="v">${submittedMaNVToday.size} / ${teamRoster.length}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box amber">${kpiIcon('alert')}</div>
+        <div><div class="l">Chưa nộp (hôm nay)</div><div class="v">${missingEmployees.length}</div></div></div></div>
+      <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box violet">${kpiIcon('target')}</div>
+        <div><div class="l">Năng suất Tổ</div><div class="v">${teamProductivity!==null?teamProductivity+'%':'—'}</div></div></div></div>
     </div>
+
     <div class="card">
-      <div class="section-title">Năng suất theo nhân viên</div>
-      ${empRows.length? empRows.map(e=>`
-        <div class="barrow">
-          <div>${esc(e.ten)} (${esc(e.maNV)})</div>
-          <div class="bar" style="width:${e.prod?Math.min(100,e.prod/maxProd*100):0}%;background:${e.prod>=100?'#2f9e58':e.prod>=80?'#c98a1c':'#e8622c'};"></div>
-          <div>${e.prod!==null?e.prod+'%':'—'}</div>
-        </div>`).join('') : '<div class="empty">Chưa có dữ liệu</div>'}
+      <div class="section-title">Biến động Năng suất Tổ theo Ngày (${esc(window._tdFrom)} → ${esc(window._tdTo)})</div>
+      <div style="height:220px;position:relative;"><canvas id="teamProductivityChart"></canvas></div>
     </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="card" style="margin-bottom:0;">
+        <div class="section-title">Chưa nộp dữ liệu hôm nay</div>
+        ${missingEmployees.length? `
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${missingEmployees.map(e=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#fef2f2;border-radius:10px;">
+              <span style="font-size:13.5px;font-weight:600;color:#334155;">${esc(e.ten)} <span style="color:#94a3b8;font-weight:500;">(${esc(e.maNV)})</span></span>
+            </div>`).join('')}
+          </div>` : `<div style="padding:10px 4px;color:#10b981;font-weight:700;font-size:13.5px;">✓ Tất cả nhân viên đã nộp dữ liệu hôm nay</div>`}
+      </div>
+      <div class="card" style="margin-bottom:0;">
+        <div class="section-title">Chờ duyệt</div>
+        ${pendingCount>0 ? `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div style="font-size:13.5px;color:#334155;">${pendingCount} bản ghi đang chờ duyệt</div>
+            <button class="btn btn-outline btn-sm" data-route="approve">Xem danh sách Duyệt</button>
+          </div>` : `<div style="padding:10px 4px;color:#10b981;font-weight:700;font-size:13.5px;">✓ Không có bản ghi chờ duyệt</div>`}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Hiệu suất theo Nhân viên (${esc(window._tdFrom)} → ${esc(window._tdTo)})</div>
+      ${empRows.length? `<div class="tablewrap"><table><thead><tr>
+        <th>Nhân viên</th><th>TG thao tác (phút)</th><th>TG thao tác chuẩn (phút)</th><th>Sản lượng</th><th>Năng suất</th><th>Trạng thái</th>
+      </tr></thead><tbody>
+      ${empRows.map(e=>`<tr>
+        <td>${esc(e.ten)} <span style="color:#94a3b8;">(${esc(e.maNV)})</span></td>
+        <td>${e.actual}</td><td>${fmt1(e.stdMin)}</td><td>${e.qty}</td>
+        <td>${e.prod!==null?e.prod+'%':'—'}</td>
+        <td><span class="pill ${productivityClass(e.prod)}">${e.prod!==null?(e.prod>=100?'Đạt':e.prod>=80?'Cần cải thiện':'Thấp'):'Chưa có dữ liệu'}</span></td>
+      </tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty">Chưa có dữ liệu trong khoảng thời gian này</div>'}
+    </div>
+
     <div class="card">
       <div class="section-title">Chi tiết Work Record (${rows.length})</div>
       ${renderRecordTable(rows, {showToolbar:false})}
@@ -1384,18 +1570,27 @@ function viewTeamDash(){
 }
 
 /* ---------------- Views: ADMIN ---------------- */
+/* Chỉ TỔ CHỨC LẠI cách hiển thị 6 mục Quản trị hiện có thành 2 nhóm cho dễ nhìn (DỮ LIỆU / TÀI KHOẢN & HỆ
+   THỐNG) — KHÔNG thêm bất kỳ route/chức năng mới nào. "Duyệt" (Approval) và "Thống kê Tổ" (Report năng suất)
+   đã là 2 tab riêng ở menu chính (xem tabsForRole()), không lặp lại ở đây. Audit Log hiện chỉ xem được theo
+   từng bản ghi (nút "Log" trong bảng Work Record), hệ thống CHƯA có màn danh sách Audit Log tổng — nên KHÔNG
+   thêm mục "Audit Log" vào đây (đúng nguyên tắc: không tạo business logic/route mới chỉ để làm menu). */
+const ADMIN_TAB_GROUPS = [
+  { label:'Dữ liệu', tabs:[['employees','Nhân viên'],['teams','Tổ'],['catalog','Sản phẩm/TGC/Gián tiếp'],['records','Tất cả Work Record']] },
+  { label:'Tài khoản & Hệ thống', tabs:[['accounts','Tài khoản'],['backup','Backup']] },
+];
 function viewAdmin(){
-  const tabs = [
-    ['employees','Nhân viên'],['teams','Tổ'],['catalog','Sản phẩm/TGC/Gián tiếp'],
-    ['records','Tất cả Work Record'],['accounts','Tài khoản'],['backup','Backup'],
-  ];
-  const strip = tabs.map(([k,l])=>`<button data-action="adminTab" data-val="${k}" class="${adminTab===k?'active':''}">${l}</button>`).join('');
+  const groupsHtml = ADMIN_TAB_GROUPS.map(g=>`
+    <div style="margin-bottom:10px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#94a3b8;margin-bottom:6px;">${esc(g.label)}</div>
+      <div class="tabstrip" style="margin-bottom:0;">${g.tabs.map(([k,l])=>`<button data-action="adminTab" data-val="${k}" class="${adminTab===k?'active':''}">${l}</button>`).join('')}</div>
+    </div>`).join('');
   let body = '';
   if (adminTab==='records') body = viewAdminRecords();
   else if (adminTab==='accounts') body = viewAdminAccounts();
   else if (adminTab==='backup') body = viewAdminBackup();
   else body = viewAdminImport(adminTab);
-  return renderShell(`<div class="tabstrip">${strip}</div>${body}`);
+  return renderShell(`${groupsHtml}${body}`);
 }
 
 /* Cột chuẩn cho từng loại import — đổi ở đây nếu anh dùng tên cột khác trong file Excel thật.
@@ -2230,6 +2425,7 @@ function attachShellEvents(){
   document.getElementById('modalRoot').addEventListener('click', onAppClick); // #modalRoot là sibling của #app, không phải con — cần delegation riêng, xem ghi chú ở đầu file
   initDashboardChart(); // no-op neu #dashboardProductivityChart khong ton tai (khong phai trang Dashboard)
   initAdminDashboardChart(); // no-op neu #adminDashboardChart khong ton tai (khong phai trang Admin Dashboard)
+  initTeamProductivityChart(); // no-op neu #teamProductivityChart khong ton tai (khong phai trang Team Dashboard)
   const dm = document.getElementById('dashboardMonthInput');
   if (dm) dm.addEventListener('change', e=>{ dashboardMonthValue = e.target.value; render(); });
   const dd = document.getElementById('dashboardDayInput');
@@ -2340,6 +2536,12 @@ async function handleAction(action, val, id){
     case 'rejectOne': openRejectModal(id); return;
     case 'editRecord': loadRecordForEdit(id); return;
     case 'applyTeamDash': window._tdFrom=document.getElementById('tdFrom').value; window._tdTo=document.getElementById('tdTo').value; render(); return;
+    case 'tdSetPreset': {
+      window._tdPreset = val;
+      const r = teamDashPeriodRange(val);
+      if (r){ window._tdFrom = r.from; window._tdTo = r.to; }
+      render(); return;
+    }
     case 'exportTeamRecords': exportRecords(currentTeamDashRows()); return;
     case 'exportAllRecords': exportRecords(DB.workRecords); return;
     case 'deleteRecord': confirmDeleteRecord(id); return;
