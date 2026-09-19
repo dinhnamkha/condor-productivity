@@ -258,6 +258,11 @@ function seedDB(){
     workCatalog:[],
     workRecords:[],
     auditLogs:[],
+    /* Tổng TG chuẩn theo Mã thành phẩm (gộp mọi công đoạn), theo TỪNG Tổ sản xuất mã đó — dữ liệu THAM KHẢO
+       do Admin cung cấp/Import riêng, KHÁC với thoiGianChuan trong workCatalog (vốn là TGC của TỪNG công đoạn
+       lẻ). Dùng để tính "TG lý thuyết" trong tab Tổng hợp Tổ. 1 dòng = {maTP, tenTP, workingTeam,
+       standardTimeTotal(phút)}. Khoá xác định 1 dòng: workingTeam + maTP. */
+    productStandardTimes:[],
     _seedPasswordsPending:true, // set default password = MaNV for seed accounts on first boot
   };
 }
@@ -288,6 +293,7 @@ async function loadDB(){
   }
   // Tu phuc hoi neu trinh duyet con cache DB cu (truoc khi gop 4 bang thanh workCatalog) - tranh crash.
   if (!Array.isArray(DB.workCatalog)) DB.workCatalog = [];
+  if (!Array.isArray(DB.productStandardTimes)) DB.productStandardTimes = []; // truoc khi co tinh nang Tong hop To
   delete DB.products; delete DB.processes; delete DB.standardTimes; delete DB.indirectWorkTypes;
 }
 function saveDB(){ localStorage.setItem(CONDOR_DB_KEY, JSON.stringify(DB)); }
@@ -410,6 +416,27 @@ function productivityForRows(directRows){
 function dailyProductivity(maNV, dateStr){
   const rows = DB.workRecords.filter(r=> r.maNV===maNV && r.date===dateStr && r.workType==='Direct' && r.status!=='Rejected');
   return productivityForRows(rows);
+}
+/* Tra Tong TG chuan (phut) cua 1 Ma TP tai 1 To (bang DB.productStandardTimes, du lieu Admin cung cap/Import
+   rieng — KHAC thoiGianChuan trong workCatalog von la TGC cua TUNG cong doan le). null neu chua co du lieu. */
+function getProductStdTime(maTP, workingTeam){
+  const row = DB.productStandardTimes.find(p=>p.maTP===maTP && p.workingTeam===workingTeam);
+  return row ? row.standardTimeTotal : null;
+}
+/* Tinh so phut "Giai lao" CHI trong 2 khung 10 phut sang (10:00-10:10) va 10 phut chieu (15:00-15:10) —
+   KHONG tinh khung 15 phut luc 17:00-17:15 (theo yeu cau: khung nay khong goi la "Giai lao"). Dung CHINH
+   khung BREAKS[0]/BREAKS[2] hien co (khong doi BREAKS, chi doc lai) de dam bao khop tuyet doi voi cach app
+   dang tu dong tru Break vao Actual Time — day la ham THUAN HIEN THI cho tab Tong hop To, khong anh huong
+   computeTimes()/breakTime/actualTime cua Work Record. */
+function computeGiaiLaoMinutes(startMin, endMinRaw){
+  let end = endMinRaw;
+  if (end <= startMin) return 0; // giong computeTimes(): qua nua dem thi KHONG tinh Break (BR-241), Giai lao cung vay
+  const GIAI_LAO_WINDOWS = [BREAKS[0], BREAKS[2]]; // 10:00-10:10 va 15:00-15:10 — bo qua BREAKS[1] (trua) va BREAKS[3] (17h)
+  let mins = 0;
+  for (const [bs,be] of GIAI_LAO_WINDOWS){
+    mins += Math.max(0, Math.min(end,be) - Math.max(startMin,bs));
+  }
+  return mins;
 }
 
 /* Badge mau nhe cho cot "Loai" — dung chung o moi bang Work Record (renderRecordTable/viewApprove/viewAdminRecords). */
@@ -539,6 +566,8 @@ async function syncEmployeesAndTeamsFromAPI(session){
   if (catalogResult && catalogResult.ok) DB.workCatalog = catalogResult.catalog;
   const workRecordResult = await apiCall('listWorkRecords', { session });
   if (workRecordResult && workRecordResult.ok) DB.workRecords = workRecordResult.workRecords;
+  const stdTimeResult = await apiCall('listProductStdTimes', { session });
+  if (stdTimeResult && stdTimeResult.ok) DB.productStandardTimes = stdTimeResult.productStdTimes;
   if (empResult && empResult.ok) setLastSyncAt(Date.now()); // coi "dong bo thanh cong" = it nhat lay duoc danh sach Nhan vien moi nhat
   saveDB();
 }
@@ -656,6 +685,8 @@ function tabsForRole(role){
       {k:'history', label:'Lịch sử'},
       {k:'approve', label:'Duyệt'},
       {k:'teamdash', label:'Thống kê Tổ'},
+      {k:'teamsummary', label:'Tổng hợp Tổ'},
+      {k:'stdtime', label:'TG Chuẩn SP'},
       {k:'admin', label:'Quản trị'},
     ];
   }
@@ -667,6 +698,7 @@ function tabsForRole(role){
   if (role==='Leader'){
     t.push({k:'approve', label:'Duyệt'});
     t.push({k:'teamdash', label:'Tổ'});
+    t.push({k:'teamsummary', label:'Tổng hợp Tổ'});
   }
   return t;
 }
@@ -1599,6 +1631,163 @@ function viewTeamDash(){
   `);
 }
 
+/* ---------------- Views: TỔNG HỢP TỔ (Leader/Admin) ----------------
+   Bảng THAM KHẢO — KHÔNG ghi vào DB, chỉ đọc/gộp lại DB.workRecords hiện có + DB.productStandardTimes (Admin
+   cung cấp) để giúp Tổ trưởng đỡ phải tự tính thời gian. Số lượng ở đây KHÔNG phải số liệu chính thức — Leader
+   vẫn phải đối chiếu với số nhập kho trong ngày trước khi nhập vào bảng riêng của họ. */
+/* Quy doi 1 preset ('today'|'week'|'month') thanh {from,to} — dung chung logic voi teamDashPeriodRange(),
+   nhung tach rieng ham/state (window._ts*) de khong dung do voi bo loc cua tab "Thống kê Tổ" (window._td*). */
+function teamSummaryPeriodRange(preset){ return teamDashPeriodRange(preset); }
+function buildTeamSummaryRows(scope, fromStr, toStr){
+  const rows = [];
+  const lentOut = [];
+  let giaiLaoTotal = 0;
+  // Dung Date.UTC() (khong qua "new Date(fromStr+'T00:00:00')" roi doi lai bang toISOString()) de tranh loi
+  // lech 1 ngay do timezone dia phuong (vd UTC+7 tai VN: "T00:00:00" bi hieu la 00:00 gio dia phuong, doi
+  // sang UTC lai lui ve ngay hom truoc) — day la loi da co san o mot vai noi khac trong app (vd
+  // teamDashPeriodRange/getTeamProductivityTrendData), nhung KHONG sua o day de tranh anh huong pham vi ngoai
+  // tinh nang nay; ham MOI nay tu dung UTC nhat quan tu dau den cuoi de khong bi loi tuong tu.
+  let d = new Date(Date.UTC(...fromStr.split('-').map(Number).map((n,i)=> i===1?n-1:n)));
+  const end = new Date(Date.UTC(...toStr.split('-').map(Number).map((n,i)=> i===1?n-1:n)));
+  let guard = 0;
+  while (d<=end && guard<93){
+    const dateStr = d.toISOString().slice(0,10);
+    const dayRows = DB.workRecords.filter(r=> r.workingTeam===scope && r.date===dateStr && r.status!=='Rejected');
+    let giaiLaoMin = 0;
+    dayRows.forEach(r=>{ giaiLaoMin += computeGiaiLaoMinutes(r.start, r.end); });
+    giaiLaoTotal += giaiLaoMin;
+    // ---- Trực tiếp: gộp theo Mã TP ----
+    const directByMaTP = {};
+    dayRows.filter(r=>r.workType==='Direct').forEach(r=>{
+      const key = r.maTP;
+      if (!directByMaTP[key]) directByMaTP[key] = { maTP:r.maTP, tenTP:r.tenTP, qty:0, actual:0, supportActual:0, supportTeams:new Set() };
+      const g = directByMaTP[key];
+      g.qty += r.quantity; g.actual += r.actualTime;
+      const homeTeam = employeeTeamOf(r.maNV);
+      if (homeTeam && homeTeam!==scope){ g.supportActual += r.actualTime; g.supportTeams.add(homeTeam); }
+      if (!g.tenTP && r.tenTP) g.tenTP = r.tenTP;
+    });
+    Object.values(directByMaTP).forEach(g=>{
+      const stdMin = getProductStdTime(g.maTP, scope);
+      const stdHour = stdMin!==null ? stdMin/60 : null;
+      const theoreticalHour = stdMin!==null ? (stdMin*g.qty)/60 : null;
+      const laborHour = g.actual/60;
+      const prod = (stdMin!==null && g.actual>0) ? fmt1((stdMin*g.qty)/g.actual*100) : null;
+      rows.push({ date: dateStr, workType:'Direct', maTP:g.maTP, tenTP:g.tenTP||'', congDoanLabel:'Trực tiếp',
+        qty:g.qty, stdHour, theoreticalHour, laborHour,
+        supportDirectHour: g.supportActual/60, supportIndirectHour: 0,
+        supportTeams: [...g.supportTeams], productivity: prod,
+        note: stdMin===null ? 'Chưa có TG chuẩn' : '' });
+    });
+    // ---- Gián tiếp: gộp theo indirectType (kể cả Giải lao — tính riêng bên dưới) ----
+    const indirectByType = {};
+    dayRows.filter(r=>r.workType==='Indirect').forEach(r=>{
+      const key = r.indirectType||'(Không rõ)';
+      if (!indirectByType[key]) indirectByType[key] = { indirectType:key, actual:0, supportActual:0, supportTeams:new Set() };
+      const g = indirectByType[key];
+      g.actual += r.actualTime;
+      const homeTeam = employeeTeamOf(r.maNV);
+      if (homeTeam && homeTeam!==scope){ g.supportActual += r.actualTime; g.supportTeams.add(homeTeam); }
+    });
+    Object.values(indirectByType).forEach(g=>{
+      rows.push({ date: dateStr, workType:'Indirect', maTP:'', tenTP:'', congDoanLabel:g.indirectType,
+        qty:0, stdHour:null, theoreticalHour:null, laborHour:g.actual/60,
+        supportDirectHour:0, supportIndirectHour:g.supportActual/60,
+        supportTeams:[...g.supportTeams], productivity:null, note:'' });
+    });
+    if (giaiLaoMin>0){
+      rows.push({ date: dateStr, workType:'Indirect', maTP:'', tenTP:'', congDoanLabel:'Giải lao/休憩',
+        qty:0, stdHour:null, theoreticalHour:null, laborHour:giaiLaoMin/60,
+        supportDirectHour:0, supportIndirectHour:0, supportTeams:[], productivity:null, note:'' });
+    }
+    // ---- Đã cho Tổ khác mượn người (nhân viên chính của Tổ này, đi làm ở Tổ khác trong ngày) ----
+    const lentDay = DB.workRecords.filter(r=> r.date===dateStr && r.status!=='Rejected' && r.workingTeam!==scope && employeeTeamOf(r.maNV)===scope);
+    const lentByTeam = {};
+    lentDay.forEach(r=>{
+      const key = r.workingTeam;
+      if (!lentByTeam[key]) lentByTeam[key] = { team:key, actual:0, maTPs:new Set() };
+      lentByTeam[key].actual += r.actualTime;
+      if (r.workType==='Direct' && r.maTP) lentByTeam[key].maTPs.add(r.maTP); else if (r.workType==='Indirect' && r.indirectType) lentByTeam[key].maTPs.add(r.indirectType);
+    });
+    Object.values(lentByTeam).forEach(x=> lentOut.push({ date:dateStr, team:x.team, hours:fmt1(x.actual/60), items:[...x.maTPs].join(', ') }));
+    d.setUTCDate(d.getUTCDate()+1);
+    guard++;
+  }
+  rows.sort((a,b)=> a.date===b.date ? 0 : (a.date<b.date?-1:1));
+  return { rows, lentOut, giaiLaoTotalHour: fmt1(giaiLaoTotal/60) };
+}
+function viewTeamSummary(){
+  const u = currentUser();
+  const isAdmin = u.role==='Admin';
+  window._tsPreset = window._tsPreset || 'month';
+  window._tsFrom = window._tsFrom || monthStartStr();
+  window._tsTo = window._tsTo || todayStr();
+  const scope = isAdmin ? (window._tsTeam || (DB.teams[0] && DB.teams[0].name) || null) : teamLedBy(u.maNV);
+
+  if (!scope){
+    return renderShell(`<div class="card"><div class="empty">Bạn chưa được gán làm Tổ trưởng của Tổ nào.</div></div>`);
+  }
+
+  const teamSelectHtml = isAdmin ? `
+      <label style="margin:0;">Tổ:</label>
+      <select id="tsTeamSelect">${DB.teams.map(t=>`<option value="${esc(t.name)}" ${t.name===scope?'selected':''}>${esc(t.name)}</option>`).join('')}</select>` : '';
+
+  const { rows, lentOut, giaiLaoTotalHour } = buildTeamSummaryRows(scope, window._tsFrom, window._tsTo);
+
+  return renderShell(`
+    <div class="section-title" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
+      <span>TỔNG HỢP TỔ: ${esc(scope)}</span>
+    </div>
+    <div class="banner">Bảng này chỉ mang tính <b>tham khảo</b> để đỡ phải tự tính thời gian/năng suất — số lượng SẢN PHẨM ở đây <b>chưa chắc đã đúng</b>, Tổ trưởng vẫn cần đối chiếu với số liệu nhập kho trong ngày trước khi ghi vào bảng riêng của mình. Thời gian gián tiếp (kể cả Giải lao) luôn được liệt kê nhưng KHÔNG tính vào Năng suất.</div>
+    <div class="toolbar">
+      <div class="btnlist" style="gap:6px;">
+        <button data-action="tsSetPreset" data-val="today" class="${window._tsPreset==='today'?'active':''}" style="min-height:38px;padding:8px 14px;">Hôm nay</button>
+        <button data-action="tsSetPreset" data-val="week" class="${window._tsPreset==='week'?'active':''}" style="min-height:38px;padding:8px 14px;">Tuần này</button>
+        <button data-action="tsSetPreset" data-val="month" class="${window._tsPreset==='month'?'active':''}" style="min-height:38px;padding:8px 14px;">Tháng này</button>
+        <button data-action="tsSetPreset" data-val="custom" class="${window._tsPreset==='custom'?'active':''}" style="min-height:38px;padding:8px 14px;">Tùy chọn</button>
+      </div>
+      ${window._tsPreset==='custom' ? `
+      <label style="margin:0;">Từ:</label><input type="date" id="tsFrom" value="${window._tsFrom}">
+      <label style="margin:0;">Đến:</label><input type="date" id="tsTo" value="${window._tsTo}">
+      <button class="btn btn-outline btn-sm" data-action="applyTeamSummary">Lọc</button>` : ''}
+      ${teamSelectHtml}
+    </div>
+
+    <div class="card">
+      <div class="section-title">Chi tiết theo Ngày / Mã hàng (${esc(window._tsFrom)} → ${esc(window._tsTo)})</div>
+      ${rows.length? `<div class="tablewrap"><table><thead><tr>
+        <th>Ngày</th><th>Mã TP</th><th>Tên TP</th><th>Loại</th><th>SL</th>
+        <th>TG chuẩn (giờ)</th><th>TG lý thuyết (giờ)</th><th>TG nhân công (giờ)</th>
+        <th>TG nhận hỗ trợ trực (giờ)</th><th>TG nhận hỗ trợ gián (giờ)</th><th>Nhận hỗ trợ từ Tổ</th>
+        <th>Năng suất</th><th>Ghi chú</th>
+      </tr></thead><tbody>
+      ${rows.map(r=>`<tr>
+        <td>${fmtDateVN(r.date)}</td>
+        <td>${esc(r.maTP)||'—'}</td><td>${esc(r.tenTP)||'—'}</td><td>${esc(r.congDoanLabel)}</td>
+        <td>${r.workType==='Direct'?r.qty:'—'}</td>
+        <td>${r.stdHour!==null?fmt3(r.stdHour):'—'}</td>
+        <td>${r.theoreticalHour!==null?fmt1(r.theoreticalHour):'—'}</td>
+        <td>${fmt1(r.laborHour)}</td>
+        <td>${r.supportDirectHour>0?fmt1(r.supportDirectHour):'—'}</td>
+        <td>${r.supportIndirectHour>0?fmt1(r.supportIndirectHour):'—'}</td>
+        <td>${r.supportTeams.length?esc(r.supportTeams.join(', ')):'—'}</td>
+        <td>${r.productivity!==null?`<span class="pill ${productivityClass(r.productivity)}">${r.productivity}%</span>`:'—'}</td>
+        <td>${esc(r.note)}</td>
+      </tr>`).join('')}
+      </tbody></table></div>
+      <div class="hint" style="margin-top:8px;">Tổng thời gian Giải lao (10:00–10:10 và 15:00–15:10) trong khoảng đang xem: <b>${giaiLaoTotalHour} giờ</b> (đã liệt kê ở dòng "Giải lao/休憩" mỗi ngày, không tính vào Năng suất).</div>`
+      : '<div class="empty">Chưa có dữ liệu trong khoảng thời gian này</div>'}
+    </div>
+
+    <div class="card">
+      <div class="section-title">Đã cho Tổ khác mượn người (tham khảo — không tính vào Năng suất Tổ này)</div>
+      ${lentOut.length? `<div class="tablewrap"><table><thead><tr><th>Ngày</th><th>Tổ nhận hỗ trợ</th><th>Tổng giờ</th><th>Mã hàng/Việc</th></tr></thead>
+      <tbody>${lentOut.map(x=>`<tr><td>${fmtDateVN(x.date)}</td><td>${esc(x.team)}</td><td>${x.hours}</td><td>${esc(x.items)}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">Không có.</div>'}
+    </div>
+  `);
+}
+
 /* ---------------- Views: ADMIN ---------------- */
 /* Chỉ TỔ CHỨC LẠI cách hiển thị 6 mục Quản trị hiện có thành 2 nhóm cho dễ nhìn (DỮ LIỆU / TÀI KHOẢN & HỆ
    THỐNG) — KHÔNG thêm bất kỳ route/chức năng mới nào. "Duyệt" (Approval) và "Thống kê Tổ" (Report năng suất)
@@ -1650,6 +1839,24 @@ const TEMPLATES = {
 };
 function downloadTemplate(type){
   if (typeof XLSX==='undefined'){ showToast('Không tải được thư viện Excel (cần internet cho lần đầu).', true); return; }
+  if (type==='productstdtime'){
+    // Khong dung duoc TEMPLATES tinh (danh sach Ma TP la du lieu song) — sinh header dong: MaTP, TenTP, roi 1 cot/Tổ.
+    const teamNames = DB.teams.map(t=>t.name);
+    const headers = ['MaTP','TenTP', ...teamNames];
+    const byMaTP = {};
+    DB.productStandardTimes.forEach(p=>{
+      if (!byMaTP[p.maTP]) byMaTP[p.maTP] = { MaTP:p.maTP, TenTP:p.tenTP||'' };
+      byMaTP[p.maTP][p.workingTeam] = p.standardTimeTotal;
+    });
+    const sampleRows = Object.keys(byMaTP).length
+      ? Object.values(byMaTP).map(r=> headers.map(h=> r[h]!==undefined ? r[h] : ''))
+      : [['90000080000','Ba ri e 1500 M8 Mini Crom-VFU019', ...teamNames.map(()=>'')]];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Mau');
+    XLSX.writeFile(wb, 'mau_import_tgchuan_sp.xlsx');
+    return;
+  }
   const t = TEMPLATES[type];
   const ws = XLSX.utils.aoa_to_sheet([t.headers, ...t.sample]);
   const wb = XLSX.utils.book_new();
@@ -1946,6 +2153,26 @@ function manualAdd(type){
       DB.workCatalog.push(newItem); // fallback cuc bo neu chua co API dung chung
       const filled = autoFillPendingStandardTimes();
       saveDB(); showToast('Đã thêm.' + (filled? ` Đã tự động cập nhật TG chuẩn cho ${filled} Work Record đang chờ.` : '')); render();
+    })();
+    return;
+  }
+  if (type==='productstdtime'){
+    const workingTeam = document.getElementById('addStdTo').value;
+    const maTP = val('addStdMaTP');
+    const tenTP = val('addStdTenTP');
+    const tg = Number(val('addStdTG'))||0;
+    if (!workingTeam || !maTP){ showToast('Nhập đủ Tổ và Mã TP.', true); return; }
+    const newItem = {workingTeam, maTP, tenTP, standardTimeTotal: tg};
+    (async()=>{
+      const apiResult = await apiCallOrQueue('addProductStdTime', { session: currentSession, item: newItem });
+      if (apiResult){
+        if (!apiResult.ok){ showToast(apiResult.error||'Thêm thất bại.', true); return; }
+        DB.productStandardTimes = apiResult.productStdTimes; saveDB(); showToast('Đã thêm (đồng bộ dùng chung).'); render();
+        return;
+      }
+      const idx = DB.productStandardTimes.findIndex(p=>p.workingTeam===workingTeam && p.maTP===maTP);
+      if (idx>=0) DB.productStandardTimes[idx] = newItem; else DB.productStandardTimes.push(newItem); // fallback cuc bo
+      saveDB(); showToast('Đã thêm.'); render();
     })();
     return;
   }
@@ -2330,6 +2557,61 @@ function viewAdminBackup(){
     <button class="btn btn-primary" style="margin-top:10px;" data-action="parseBackupImport">Xem trước &amp; Khôi phục</button>
   </div>`;
 }
+
+/* ---------------- Views: TG CHUẨN SP (Tổng thời gian chuẩn theo Mã TP, tách tab riêng — KHÔNG nằm trong
+   Quản trị) ---------------- Dữ liệu THAM KHẢO do Admin cung cấp/Import, khác hẳn thoiGianChuan trong
+   workCatalog (vốn là TGC của từng công đoạn lẻ) — bảng này là TỔNG tất cả công đoạn của 1 Mã TP, tại 1 Tổ.
+   Đơn vị lưu trữ: PHÚT (khớp với workCatalog). */
+function viewProductStdTime(){
+  const teamCols = DB.teams.map(t=>t.name);
+  const sorted = DB.productStandardTimes.slice().sort((a,b)=> (a.maTP||'').localeCompare(b.maTP||'') || (a.workingTeam||'').localeCompare(b.workingTeam||''));
+  return renderShell(`
+    <div class="card">
+      <div class="section-title">Import Tổng TG chuẩn theo Mã thành phẩm (1 dòng/Mã TP, các cột sau là Tổ)</div>
+      <div class="hint">Cột yêu cầu: <b>MaTP | TenTP</b>, tiếp theo là <b>1 cột cho mỗi Tổ</b> (đúng tên Tổ hiện có) — giá trị là <b>Tổng thời gian chuẩn (phút)</b> của toàn bộ Mã TP đó tại Tổ tương ứng (tổng tất cả công đoạn). Để trống hoặc "-" nếu Tổ đó không làm Mã TP này. Import này <b>ghi đè toàn bộ</b> bảng.</div>
+      <button class="btn btn-outline btn-sm" style="margin-top:8px;" data-action="downloadTemplate" data-val="productstdtime">Tải file mẫu (.xlsx)</button>
+      <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="margin-top:10px;">
+      <button class="btn btn-primary" style="margin-top:10px;" data-action="parseImport" data-val="productstdtime">Xem trước dữ liệu</button>
+    </div>
+    <div class="card">
+      <div class="section-title">+ Thêm thủ công (1 dòng = 1 Mã TP tại 1 Tổ)</div>
+      <div class="row2">
+        <div class="field"><label>Tổ</label><select id="addStdTo"><option value="">—</option>${teamCols.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('')}</select></div>
+        <div class="field"><label>Mã TP</label><input type="text" id="addStdMaTP"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Tên TP</label><input type="text" id="addStdTenTP"></div>
+        <div class="field"><label>Tổng TG chuẩn (phút) <span class="hint" style="display:inline;margin:0;">(tổng tất cả công đoạn)</span></label><input type="number" step="0.001" id="addStdTG"></div>
+      </div>
+      <button class="btn btn-primary" data-action="manualAdd" data-val="productstdtime">Thêm</button>
+    </div>
+    <div class="card"><div class="section-title">Danh sách hiện có (${sorted.length})</div>
+      ${sorted.length? `<div class="tablewrap"><table><thead><tr><th>Mã TP</th><th>Tên TP</th><th>Tổ</th><th>Tổng TG chuẩn (phút)</th><th>≈ Giờ</th><th></th></tr></thead>
+      <tbody>${sorted.map(p=>`<tr><td>${esc(p.maTP)}</td><td>${esc(p.tenTP)}</td><td>${esc(p.workingTeam)}</td><td>${fmt3(p.standardTimeTotal)}</td><td>${fmt3(p.standardTimeTotal/60)}</td>
+        <td><button class="btn btn-danger btn-sm" data-action="deleteProductStdTime" data-id="${esc(p.workingTeam)}|${esc(p.maTP)}">Xoá</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">Chưa có dữ liệu.</div>'}
+    </div>
+  `);
+}
+function deleteProductStdTime(key){
+  const [workingTeam, maTP] = key.split('|');
+  const row = DB.productStandardTimes.find(p=>p.workingTeam===workingTeam && p.maTP===maTP);
+  if (!row) return;
+  openModal(`<h3>Xoá TG chuẩn — ${esc(maTP)} / ${esc(workingTeam)}</h3>
+    <div class="banner">Xoá vĩnh viễn, không khôi phục được. Gõ <b>XOA</b> để xác nhận.</div>
+    <div class="field" style="margin-top:10px;"><input type="text" id="deleteStdConfirmText" placeholder="Gõ XOA"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-danger" id="confirmDeleteStd">Xoá vĩnh viễn</button>
+    </div>`);
+  document.getElementById('confirmDeleteStd').addEventListener('click', async ()=>{
+    if (document.getElementById('deleteStdConfirmText').value.trim()!=='XOA'){ showToast('Chưa gõ đúng "XOA".', true); return; }
+    const apiResult = await apiCallOrQueue('deleteProductStdTime', { session: currentSession, workingTeam, maTP });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Xoá thất bại.', true); return; }
+    DB.productStandardTimes = DB.productStandardTimes.filter(p=>!(p.workingTeam===workingTeam && p.maTP===maTP));
+    saveDB(); closeModal(); showToast('Đã xoá.'); render();
+  });
+}
 function exportBackup(){
   const json = JSON.stringify(DB, null, 2);
   const blob = new Blob([json], {type:'application/json'});
@@ -2386,8 +2668,8 @@ function showBackupPreviewModal(parsed){
 
 
 function isRouteAllowed(routeKey, role){
-  if (routeKey==='admin') return role==='Admin';
-  if (routeKey==='approve' || routeKey==='teamdash') return role==='Leader' || role==='Admin';
+  if (routeKey==='admin' || routeKey==='stdtime') return role==='Admin';
+  if (routeKey==='approve' || routeKey==='teamdash' || routeKey==='teamsummary') return role==='Leader' || role==='Admin';
   return true; // dashboard, entry, history: mọi role đã đăng nhập đều được vào
 }
 function render(){
@@ -2402,6 +2684,8 @@ function render(){
     case 'history': html = viewHistory(); break;
     case 'approve': html = viewApprove(); break;
     case 'teamdash': html = viewTeamDash(); break;
+    case 'teamsummary': html = viewTeamSummary(); break;
+    case 'stdtime': html = viewProductStdTime(); break;
     case 'admin': html = viewAdmin(); break;
     default: html = viewDashboard();
   }
@@ -2479,6 +2763,8 @@ function attachShellEvents(){
   if (rProd) rProd.addEventListener('change', e=>{ recordProductFilter = e.target.value; recordPage = 1; render(); });
   const rps = document.getElementById('recordPageSizeSelect');
   if (rps) rps.addEventListener('change', e=>{ recordPageSize = Number(e.target.value); recordPage = 1; render(); });
+  const tsTeam = document.getElementById('tsTeamSelect');
+  if (tsTeam) tsTeam.addEventListener('change', e=>{ window._tsTeam = e.target.value; render(); });
   const cs = document.getElementById('catalogSearchInput');
   if (cs) cs.addEventListener('input', e=>{
     catalogSearch = e.target.value;
@@ -2579,6 +2865,14 @@ async function handleAction(action, val, id){
       render(); return;
     }
     case 'exportTeamRecords': exportRecords(currentTeamDashRows()); return;
+    case 'applyTeamSummary': window._tsFrom=document.getElementById('tsFrom').value; window._tsTo=document.getElementById('tsTo').value; render(); return;
+    case 'tsSetPreset': {
+      window._tsPreset = val;
+      const r = teamSummaryPeriodRange(val);
+      if (r){ window._tsFrom = r.from; window._tsTo = r.to; }
+      render(); return;
+    }
+    case 'deleteProductStdTime': deleteProductStdTime(id); return;
     case 'exportAllRecords': exportRecords(DB.workRecords); return;
     case 'deleteRecord': confirmDeleteRecord(id); return;
     case 'confirmClearAllRecords': confirmClearAllRecords(); return;
@@ -2874,6 +3168,26 @@ async function commitImport(){
     const apiResult = await apiCallOrQueue('replaceTeams', { session: currentSession, teams: newTeams });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Tổ thất bại.', true); return; }
     DB.teams = (apiResult && apiResult.ok) ? apiResult.teams : newTeams; // fallback cuc bo neu chua co API dung chung
+  } else if (type==='productstdtime'){
+    // Bang dang WIDE (1 dong/Ma TP, moi cot con lai la 1 Tổ) — flatten thanh 1 dong/(Tổ, Ma TP), bo qua o trong/"-".
+    const teamNames = DB.teams.map(t=>t.name);
+    const flat = [];
+    rows.forEach(row=>{
+      const maTP = String(row.MaTP||'').trim();
+      if (!maTP) return;
+      const tenTP = String(row.TenTP||'').trim();
+      teamNames.forEach(teamName=>{
+        const raw = row[teamName];
+        const s = String(raw==null?'':raw).trim();
+        if (s==='' || s==='-') return;
+        const num = Number(s);
+        if (isNaN(num)) return;
+        flat.push({ workingTeam: teamName, maTP, tenTP, standardTimeTotal: num });
+      });
+    });
+    const apiResult = await apiCallOrQueue('replaceProductStdTimes', { session: currentSession, productStdTimes: flat });
+    if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import TG chuẩn SP thất bại.', true); return; }
+    DB.productStandardTimes = (apiResult && apiResult.ok) ? apiResult.productStdTimes : flat; // fallback cuc bo neu chua co API dung chung
   }
   saveDB(); closeModal();
   showToast('Import thành công.' + (autoFilledCount? ` Đã tự động cập nhật TG chuẩn cho ${autoFilledCount} Work Record đang chờ.` : ''));
