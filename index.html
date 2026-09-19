@@ -501,6 +501,15 @@ function updateGlobalLoadingBar(){
   if (!bar) return;
   if (pendingApiCalls>0) bar.classList.add('show'); else bar.classList.remove('show');
 }
+/* Thong diep server tra ve khi passwordHash gui kem session khong con khop (VD: mat khau vua bi Admin reset,
+   tai khoan vua bi khoa/xoa, hoac dang bi khoa tam do do vet dang nhap sai) — dung de tu dong dang xuat ben duoi,
+   KHONG phai loi form binh thuong (khac voi loi sai mat khau CU khi tu doi mat khau, cai do do noi goi tu xu ly rieng). */
+function isAuthRejectedError(msg){
+  if (!msg) return false;
+  return msg.indexOf('Mã nhân viên hoặc mật khẩu không chính xác') !== -1
+    || msg.indexOf('Tài khoản tạm khoá') !== -1
+    || msg.indexOf('Tài khoản đã bị khoá') !== -1;
+}
 async function apiCall(action, payload, _retriesLeft){
   if (!API_URL) return null;
   if (_retriesLeft===undefined) _retriesLeft = 2;
@@ -514,6 +523,16 @@ async function apiCall(action, payload, _retriesLeft){
       return await apiCall(action, payload, _retriesLeft-1);
     }
     lastApiOk = true; // cham duoc toi Server va nhan duoc JSON hop le (bat ke ok:true/false ve nghiep vu)
+    // Tu dong dang xuat neu server tu choi xac thuc cho 1 request DA DANG NHAP (khong ap dung cho chinh action
+    // 'login' hoac 'changePassword' — 2 action nay tu xu ly loi cua rieng minh, khong phai dau hieu "phien het hieu luc").
+    if (result && result.ok===false && isAuthRejectedError(result.error) && action!=='login' && action!=='changePassword' && currentSession){
+      currentSession = null;
+      localStorage.removeItem(CONDOR_SESSION_KEY);
+      sessionStorage.removeItem(CONDOR_SESSION_KEY);
+      route = 'login';
+      showToast('Phiên đăng nhập không còn hiệu lực (mật khẩu đã đổi hoặc tài khoản bị khoá ở nơi khác) — vui lòng đăng nhập lại.', true);
+      render();
+    }
     return result;
   } catch(err){
     lastApiOk = false;
@@ -612,29 +631,51 @@ async function hardReload(){
 
 let currentSession = null; // {maNV, remember, loginAt, lastActive, passwordHash}
 
+/* remember=true  -> localStorage (song qua dong trinh duyet, gioi han boi cap tuyet doi 30 ngay ben duoi)
+   remember=false -> sessionStorage (mat khi dong het tat ca tab/trinh duyet — dung nhu ky vong thuc su cua "Remember Me",
+   truoc day ca 2 truong hop deu dung localStorage nen remember=false khong khac gi remember=true) */
+function sessionStore(remember){ return remember ? localStorage : sessionStorage; }
 function loadSession(){
-  const raw = localStorage.getItem(CONDOR_SESSION_KEY);
+  let raw = localStorage.getItem(CONDOR_SESSION_KEY);
+  let store = localStorage;
+  if (!raw){ raw = sessionStorage.getItem(CONDOR_SESSION_KEY); store = sessionStorage; }
   if (!raw) return null;
   try{
     const s = JSON.parse(raw);
     const now = Date.now();
     const idleExpired = (now - s.lastActive) > 8*3600*1000;
     const rememberExpired = s.remember ? (now - s.loginAt) > 30*24*3600*1000 : true;
-    if (idleExpired && (!s.remember || rememberExpired)){ localStorage.removeItem(CONDOR_SESSION_KEY); return null; }
-    if (idleExpired && s.remember && !rememberExpired){ s.lastActive = now; localStorage.setItem(CONDOR_SESSION_KEY, JSON.stringify(s)); }
+    if (idleExpired && (!s.remember || rememberExpired)){ store.removeItem(CONDOR_SESSION_KEY); return null; }
+    if (idleExpired && s.remember && !rememberExpired){ s.lastActive = now; store.setItem(CONDOR_SESSION_KEY, JSON.stringify(s)); }
     return s;
   } catch(e){ return null; }
 }
 function touchSession(){
   if (!currentSession) return;
   currentSession.lastActive = Date.now();
-  localStorage.setItem(CONDOR_SESSION_KEY, JSON.stringify(currentSession));
+  sessionStore(currentSession.remember).setItem(CONDOR_SESSION_KEY, JSON.stringify(currentSession));
 }
 function login(maNV, remember, passwordHash){
   currentSession = {maNV, remember, loginAt:Date.now(), lastActive:Date.now(), passwordHash: passwordHash||null};
-  localStorage.setItem(CONDOR_SESSION_KEY, JSON.stringify(currentSession));
+  sessionStore(remember).setItem(CONDOR_SESSION_KEY, JSON.stringify(currentSession));
+  // Don ban con sot lai o storage kia (VD lan truoc dang nhap remember=true, lan nay bo chon)
+  sessionStore(!remember).removeItem(CONDOR_SESSION_KEY);
 }
-function logout(){ currentSession=null; localStorage.removeItem(CONDOR_SESSION_KEY); route='login'; render(); }
+function logout(){
+  const selfMaNV = currentSession ? currentSession.maNV : null;
+  currentSession=null;
+  localStorage.removeItem(CONDOR_SESSION_KEY);
+  sessionStorage.removeItem(CONDOR_SESSION_KEY);
+  // BAO MAT: neu nguoi vua logout tung dang nhap voi quyen Admin, DB.employees cache cuc bo co the dang chua
+  // HASH MAT KHAU cua TOAN BO nhan vien (server tra full cho Admin qua listEmployees) — xoa cac hash nay khoi
+  // cache ngay khi logout (giu lai hash cua chinh nguoi vua logout de dang nhap offline lan sau van dung duoc),
+  // tranh ton tai vo thoi han tren may dung chung. Cac hash bi xoa se duoc dong bo lai o lan dang nhap online ke tiep.
+  if (Array.isArray(DB.employees)){
+    DB.employees.forEach(e=>{ if (e.maNV !== selfMaNV) delete e.passwordHash; });
+    saveDB();
+  }
+  route='login'; render();
+}
 function currentUser(){ return currentSession ? DB.employees.find(e=>e.maNV===currentSession.maNV) : null; }
 
 /* ---------------- Router / state ---------------- */
@@ -752,6 +793,7 @@ function renderShell(bodyHtml){
       <nav class="sidebar-nav">${sidenav}</nav>
       <div class="sidebar-profile">
         <div class="profile-info"><b>${esc(u.ten)}</b><span>${esc(u.maNV)} · ${roleLabel(u.role)}</span></div>
+        <button class="profile-logout" data-action="openChangePassword" title="Đổi mật khẩu" style="margin-right:2px;">🔑</button>
         <button class="profile-logout" data-action="logout" title="Đăng xuất">${navIcon('logout')}</button>
       </div>
     </aside>
@@ -763,6 +805,7 @@ function renderShell(bodyHtml){
           <h1>Condor Productivity</h1>
         </div>
         <div class="userbox"><b>${esc(u.ten)}</b>${esc(u.maNV)} · ${roleLabel(u.role)}</div>
+        <button class="logoutBtn" data-action="openChangePassword" title="Đổi mật khẩu">🔑</button>
         <button class="logoutBtn" data-action="logout">Đăng xuất</button>
       </div>
       <header class="content-header">
@@ -2270,7 +2313,7 @@ function editEmployee(maNV){
       <div class="field"><label>Trạng thái</label><select id="editEmpTrangthai">
         <option value="Active" ${e.active?'selected':''}>Active</option>
         <option value="Inactive" ${!e.active?'selected':''}>Inactive</option></select></div>
-      <div class="field"><label>Mật khẩu mới (để trống = giữ nguyên)</label><input type="text" id="editEmpPw"></div>
+      <div class="field"><label>Mật khẩu mới (để trống = giữ nguyên)</label><input type="password" id="editEmpPw" autocomplete="new-password"></div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" data-action="closeModal">Hủy</button>
@@ -2505,7 +2548,7 @@ function viewAdminImport(tab){
       </div>
       <div class="row2">
         <div class="field"><label>Trạng thái</label><select id="addEmpTrangthai"><option value="Active">Active</option><option value="Inactive">Inactive</option></select></div>
-        <div class="field"><label>Mật khẩu (để trống = Mã NV)</label><input type="text" id="addEmpPw"></div>
+        <div class="field"><label>Mật khẩu (để trống = Mã NV)</label><input type="password" id="addEmpPw" autocomplete="new-password"></div>
       </div>
       <button class="btn btn-primary" data-action="manualAdd" data-val="employees">Thêm</button>
     </div>
@@ -2744,13 +2787,16 @@ function showBackupPreviewModal(parsed){
 function isRouteAllowed(routeKey, role){
   if (routeKey==='admin' || routeKey==='stdtime') return role==='Admin';
   if (routeKey==='approve' || routeKey==='teamdash' || routeKey==='teamsummary') return role==='Leader' || role==='Admin';
-  return true; // dashboard, entry, history: mọi role đã đăng nhập đều được vào
+  return true; // dashboard, entry, history, forcechangepw: mọi role đã đăng nhập đều được vào
 }
 function render(){
   const app = document.getElementById('app');
   if (!currentSession || !currentUser()){ app.innerHTML = viewLogin(); attachLoginEvents(); return; }
   touchSession();
   const u = currentUser();
+  // Mat khau con la mac dinh -> KHOA moi dieu huong khac, bat buoc phai doi mat khau truoc (kho co the "bam lo" bo qua man hinh nay).
+  if (u.mustChangePassword && route !== 'forcechangepw'){ route = 'forcechangepw'; }
+  if (!u.mustChangePassword && route === 'forcechangepw'){ route = 'dashboard'; }
   if (!isRouteAllowed(route, u.role)){ route='dashboard'; showToast('Bạn không có quyền truy cập mục này.', true); }
   let html;
   switch(route){
@@ -2761,10 +2807,12 @@ function render(){
     case 'teamsummary': html = viewTeamSummary(); break;
     case 'stdtime': html = viewProductStdTime(); break;
     case 'admin': html = viewAdmin(); break;
+    case 'forcechangepw': html = viewForceChangePassword(); break;
     default: html = viewDashboard();
   }
   app.innerHTML = html;
   attachShellEvents();
+  if (route === 'forcechangepw') attachForceChangePasswordEvents();
 }
 
 /* ---------------- Event wiring ---------------- */
@@ -2794,14 +2842,19 @@ function attachLoginEvents(){
         if (!apiResult.ok){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${esc(apiResult.error||'Đăng nhập thất bại.')}</div>`; return; }
         await syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash });
         login(maNV, remember, hash);
+        // Mat khau con la mac dinh (=Ma NV, do server tu cap lan dang nhap dau) -> bat buoc doi mat khau truoc khi vao he thong.
+        if (apiResult.employee && apiResult.employee.mustChangePassword){ route = 'forcechangepw'; render(); return; }
         route = 'dashboard'; render();
         return;
       }
-      // Fallback: che do cuc bo (chua deploy API dung chung, hoac API dang loi) - giu dung hanh vi cu, khong doi trai nghiem.
-      const emp = DB.employees.find(e=>e.maNV===maNV && e.active);
-      if (!emp){ errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Mã nhân viên không tồn tại hoặc đã bị khóa.</div>'; return; }
-      if (hash !== emp.passwordHash){ errBox.innerHTML = '<div class="err" style="margin-bottom:10px;">Sai mật khẩu.</div>'; return; }
+      // Fallback: che do cuc bo (chua deploy API dung chung, hoac API dang loi) - dung 1 THONG DIEP CHUNG cho
+      // "khong ton tai"/"sai mat khau"/"bi khoa", tranh lo thong tin ke tan cong co the dung de do MNV nao ton tai
+      // (truoc day 2 truong hop nay co 2 thong bao khac nhau — day la loi da duoc audit va sua o day).
+      const GENERIC_LOGIN_FAIL = 'Mã nhân viên hoặc mật khẩu không chính xác.';
+      const emp = DB.employees.find(e=>e.maNV===maNV);
+      if (!emp || !emp.active || hash !== emp.passwordHash){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${GENERIC_LOGIN_FAIL}</div>`; return; }
       login(maNV, remember, hash);
+      if (emp.mustChangePassword){ route = 'forcechangepw'; render(); return; }
       route = 'dashboard';
       render();
     } finally {
@@ -2817,6 +2870,7 @@ function attachLoginEvents(){
     if (!confirm('Xoá toàn bộ dữ liệu hiện tại trên trình duyệt này và đặt lại về mặc định (chỉ còn tài khoản Admin/Admin)? Không thể hoàn tác — nếu cần giữ lại, hãy Xuất Backup trước.')) return;
     localStorage.removeItem(CONDOR_DB_KEY);
     localStorage.removeItem(CONDOR_SESSION_KEY);
+    sessionStorage.removeItem(CONDOR_SESSION_KEY);
     location.reload();
   });
 }
@@ -2916,6 +2970,7 @@ function onAppClick(e){
 async function handleAction(action, val, id){
   switch(action){
     case 'logout': logout(); return;
+    case 'openChangePassword': openChangePasswordModal(); return;
     case 'hardReload': hardReload(); return;
     case 'entrySetType': entryState.workType=val; entryState.workingTeam=null; entryState.maTP=null; entryState.congDoan=null; entryState.maNVL=null; entryState.indirectType=null; entryState.productSearch=''; render(); return;
     case 'entrySetTeam': entryState.workingTeam=val; entryState.maTP=null; entryState.congDoan=null; entryState.maNVL=null; entryState.indirectType=null; entryState.productSearch=''; render(); return;
@@ -3324,23 +3379,106 @@ async function showAuditModal(id){
 }
 function openResetPasswordModal(maNV){
   openModal(`<h3>Reset mật khẩu — ${esc(maNV)}</h3>
-    <div class="field"><label>Mật khẩu mới <span class="req">*</span></label><input type="text" id="newPw" placeholder="Để trống = mặc định theo Mã NV"></div>
+    <div class="field"><label>Mật khẩu mới <span class="req">*</span></label><input type="password" id="newPw" autocomplete="new-password" placeholder="Để trống = mặc định theo Mã NV"></div>
+    <div class="field"><label>Xác nhận mật khẩu mới</label><input type="password" id="newPwConfirm" autocomplete="new-password" placeholder="Nhập lại mật khẩu mới ở trên"></div>
+    <div id="resetPwErr"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" data-action="closeModal">Hủy</button>
       <button class="btn btn-primary" id="confirmResetPw">Xác nhận</button>
     </div>`);
   document.getElementById('confirmResetPw').addEventListener('click', async ()=>{
-    const val = document.getElementById('newPw').value.trim() || maNV;
+    const errBox = document.getElementById('resetPwErr');
+    const pw1 = document.getElementById('newPw').value;
+    const pw2 = document.getElementById('newPwConfirm').value;
+    // Neu de trong ca 2 -> mac dinh = Ma NV (giu hanh vi cu). Neu co nhap, bat buoc 2 o phai khop nhau.
+    if (pw1 && pw1 !== pw2){ errBox.innerHTML = '<div class="err" style="margin:6px 0;">Xác nhận mật khẩu không khớp.</div>'; return; }
+    if (!confirm(`Xác nhận đặt lại mật khẩu cho Nhân viên ${maNV}? Nhân viên này sẽ phải đổi mật khẩu ngay lần đăng nhập kế tiếp.`)) return;
+    const val = pw1.trim() || maNV;
     const newHash = await sha256(val);
     const apiResult = await apiCallOrQueue('editEmployee', { session: currentSession, maNV, changes: { passwordHash: newHash } });
     if (apiResult){
       if (!apiResult.ok){ showToast(apiResult.error||'Đặt lại mật khẩu thất bại.', true); return; }
-      DB.employees = apiResult.employees; saveDB(); closeModal(); showToast('Đã đặt lại mật khẩu (đồng bộ dùng chung).'); return;
+      DB.employees = apiResult.employees; saveDB(); closeModal(); showToast('Đã đặt lại mật khẩu (đồng bộ dùng chung). Nhân viên sẽ phải đổi mật khẩu ở lần đăng nhập kế tiếp.'); return;
     }
     const emp = DB.employees.find(e=>e.maNV===maNV); // fallback cuc bo neu chua co API dung chung
     emp.passwordHash = newHash;
+    emp.mustChangePassword = true;
     saveDB(); closeModal(); showToast('Đã đặt lại mật khẩu.');
   });
+}
+
+/* Doi mat khau tu phuc vu (khong bat buoc — nguoi dang nhap tu chon doi). Bat buoc nhap dung mat khau CU,
+   server (handleChangePassword) se xac thuc lai mat khau cu truoc khi cho doi, khong chi tin client. */
+function openChangePasswordModal(){
+  const u = currentUser();
+  openModal(`<h3>Đổi mật khẩu</h3>
+    <div class="field"><label>Mật khẩu hiện tại <span class="req">*</span></label><input type="password" id="cpOld" autocomplete="current-password"></div>
+    <div class="field"><label>Mật khẩu mới <span class="req">*</span></label><input type="password" id="cpNew" autocomplete="new-password"></div>
+    <div class="field"><label>Xác nhận mật khẩu mới <span class="req">*</span></label><input type="password" id="cpConfirm" autocomplete="new-password"></div>
+    <div id="cpErr"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" data-action="closeModal">Hủy</button>
+      <button class="btn btn-primary" id="confirmChangePw">Đổi mật khẩu</button>
+    </div>`);
+  document.getElementById('confirmChangePw').addEventListener('click', ()=>doChangePassword(u.maNV, false));
+}
+async function doChangePassword(maNV, isForced){
+  const errBoxId = isForced ? 'fcpErr' : 'cpErr';
+  const oldId = isForced ? 'fcpOld' : 'cpOld';
+  const newId = isForced ? 'fcpNew' : 'cpNew';
+  const confirmId = isForced ? 'fcpConfirm' : 'cpConfirm';
+  const errBox = document.getElementById(errBoxId);
+  const oldPw = document.getElementById(oldId).value;
+  const newPw = document.getElementById(newId).value;
+  const confirmPw = document.getElementById(confirmId).value;
+  if (!oldPw || !newPw || !confirmPw){ errBox.innerHTML = '<div class="err" style="margin:6px 0;">Vui lòng nhập đủ 3 trường.</div>'; return; }
+  if (newPw !== confirmPw){ errBox.innerHTML = '<div class="err" style="margin:6px 0;">Xác nhận mật khẩu mới không khớp.</div>'; return; }
+  if (newPw === oldPw){ errBox.innerHTML = '<div class="err" style="margin:6px 0;">Mật khẩu mới phải khác mật khẩu cũ.</div>'; return; }
+  const oldHash = await sha256(oldPw);
+  const newHash = await sha256(newPw);
+  const apiResult = await apiCall('changePassword', { maNV, oldPasswordHash: oldHash, newPasswordHash: newHash });
+  if (apiResult){
+    if (!apiResult.ok){ errBox.innerHTML = `<div class="err" style="margin:6px 0;">${esc(apiResult.error||'Đổi mật khẩu thất bại.')}</div>`; return; }
+    const emp = DB.employees.find(e=>e.maNV===maNV);
+    if (emp){ emp.passwordHash = newHash; emp.mustChangePassword = false; saveDB(); }
+    currentSession.passwordHash = newHash; touchSession();
+    if (isForced){ route = 'dashboard'; render(); } else { closeModal(); }
+    showToast('Đã đổi mật khẩu thành công.');
+    return;
+  }
+  // Khong co API dung chung (offline) — xac thuc mat khau cu cuc bo, KHONG the ep server xac nhan that su.
+  const emp = DB.employees.find(e=>e.maNV===maNV);
+  if (!emp || oldHash !== emp.passwordHash){ errBox.innerHTML = '<div class="err" style="margin:6px 0;">Mật khẩu hiện tại không đúng.</div>'; return; }
+  emp.passwordHash = newHash; emp.mustChangePassword = false; saveDB();
+  currentSession.passwordHash = newHash; touchSession();
+  if (isForced){ route = 'dashboard'; render(); } else { closeModal(); }
+  showToast('Đã đổi mật khẩu (cục bộ — sẽ đồng bộ khi có mạng).');
+}
+function viewForceChangePassword(){
+  const u = currentUser();
+  return `
+  <div class="app-shell">
+    <div class="content-area" style="max-width:480px;margin:40px auto;">
+      <main>
+        <div class="card" style="padding:24px;">
+          <h1 class="page-title" style="margin-bottom:4px;">Yêu cầu đổi mật khẩu</h1>
+          <p style="color:var(--muted,#666);margin-bottom:16px;">Tài khoản <b>${esc(u.maNV)}</b> đang dùng mật khẩu mặc định hoặc vừa được Admin đặt lại. Vui lòng đặt mật khẩu mới trước khi tiếp tục sử dụng hệ thống.</p>
+          <div class="field"><label>Mật khẩu hiện tại <span class="req">*</span></label><input type="password" id="fcpOld" autocomplete="current-password"></div>
+          <div class="field"><label>Mật khẩu mới <span class="req">*</span></label><input type="password" id="fcpNew" autocomplete="new-password"></div>
+          <div class="field"><label>Xác nhận mật khẩu mới <span class="req">*</span></label><input type="password" id="fcpConfirm" autocomplete="new-password"></div>
+          <div id="fcpErr"></div>
+          <div class="modal-actions">
+            <button class="btn btn-outline" data-action="logout">Đăng xuất</button>
+            <button class="btn btn-primary" id="confirmForceChangePw">Đổi mật khẩu</button>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>`;
+}
+function attachForceChangePasswordEvents(){
+  const btn = document.getElementById('confirmForceChangePw');
+  if (btn) btn.addEventListener('click', ()=>doChangePassword(currentUser().maNV, true));
 }
 
 /* ---------------- Export ---------------- */
