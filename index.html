@@ -597,6 +597,11 @@ let recordPage = 1;
 let recordPageSize = 50;
 let recordMonthFilter = todayStr().slice(0,7); // yyyy-mm, mac dinh thang hien tai
 let recordSort = {key:'date', dir:-1};
+/* 3 bo loc moi (To/Ma NV/Ma san pham) — dung chung state theo dung nguyen tac cua cac bo loc renderRecordTable
+   hien co o tren ('' = "Tat ca", khong loc). */
+let recordTeamFilter = '';
+let recordEmployeeFilter = '';
+let recordProductFilter = '';
 /* Bộ lọc Tổng quan (Dashboard cá nhân) — chuyển đổi giữa xem theo Tháng (mặc định) và theo 1 Ngày cụ thể. */
 let dashboardMode = 'month'; // 'month' | 'day'
 let dashboardMonthValue = todayStr().slice(0,7); // yyyy-mm, mac dinh thang hien tai
@@ -899,8 +904,8 @@ function viewDashboard(){
       <div style="height:220px;position:relative;"><canvas id="dashboardProductivityChart"></canvas></div>
     </div>
     <div class="card">
-      <div class="section-title">${esc(listTitle)} (${rows.length})</div>
-      ${renderRecordTable(rows, {showToolbar:false})}
+      <div class="section-title">${esc(listTitle)}</div>
+      ${renderRecordTable(rows, {showToolbar:false, withPagination:true, withSearch:true, withTeamFilter:true, withProductFilter:true})}
     </div>
     <button class="btn btn-primary" data-route="entry">+ Nhập Work Record mới</button>
   `);
@@ -1158,7 +1163,7 @@ function viewHistory(){
   return renderShell(`
     <div class="card">
       <div class="section-title">Lịch sử Work Record</div>
-      ${renderRecordTable(rows, {withEdit:true, showToolbar:true, withMonthFilter:true})}
+      ${renderRecordTable(rows, {withEdit:true, showToolbar:true, withMonthFilter:true, withTeamFilter:true, withProductFilter:true})}
     </div>
   `);
 }
@@ -1186,9 +1191,21 @@ function renderRecordTable(allRows, config){
   config = config || {};
   const showToolbar = config.showToolbar !== false;
   const withMonthFilter = config.withMonthFilter !== undefined ? config.withMonthFilter : showToolbar;
+  const withSearch = config.withSearch !== undefined ? config.withSearch : showToolbar;
   const withEdit = !!config.withEdit;
   const withAdminActions = !!config.withAdminActions;
   const sortable = !!config.sortable;
+  // FIX HIEU NANG: phan trang truoc day chi bat khi showToolbar=true, nen cac trang tat showToolbar (Dashboard
+  // ca nhan, Team Dashboard) render TOAN BO ban ghi khong phan trang — voi du lieu that (hang nghin dong) gay
+  // giat/lag khi keo/cuon do DOM qua lon. Tach rieng withPagination khoi showToolbar de cac trang nay van AN
+  // duoc thanh cong cu Thang/Tim kiem (dung bo loc rieng cua trang) nhung VAN duoc phan trang ngam.
+  const withPagination = config.withPagination !== undefined ? config.withPagination : showToolbar;
+  // 3 bo loc moi theo yeu cau: To lam viec / Ma NV / Ma san pham — moi bo loc BAT DOC LAP voi showToolbar,
+  // de cac trang da co bo loc rieng (VD Team Dashboard co san khoang Ngay) van bat duoc rieng le.
+  const withTeamFilter = !!config.withTeamFilter;
+  const withEmployeeFilter = !!config.withEmployeeFilter;
+  const withProductFilter = !!config.withProductFilter;
+  const showFilterBar = showToolbar || withTeamFilter || withEmployeeFilter || withProductFilter;
 
   // ---- 1) Lọc theo Tháng (nếu bật) ----
   let rows = allRows.slice();
@@ -1196,14 +1213,19 @@ function renderRecordTable(allRows, config){
     rows = rows.filter(r => r.date.startsWith(recordMonthFilter));
   }
 
-  // ---- 2) Lọc theo Tìm kiếm: Mã NV / Tên / Mã TP / Công đoạn (kể cả Việc gián tiếp) ----
-  if (showToolbar && recordSearch){
+  // ---- 2) Lọc theo Tìm kiếm tự do: Mã NV / Tên / Mã TP / Công đoạn (kể cả Việc gián tiếp) ----
+  if (withSearch && recordSearch){
     const q = recordSearch.toLowerCase();
     rows = rows.filter(r =>
       r.maNV.toLowerCase().includes(q) || r.ten.toLowerCase().includes(q) ||
       (r.maTP||'').toLowerCase().includes(q) || (r.congDoan||r.indirectType||'').toLowerCase().includes(q)
     );
   }
+
+  // ---- 2b) 3 bộ lọc chọn nhanh: Tổ / Mã NV / Mã sản phẩm ----
+  if (withTeamFilter && recordTeamFilter) rows = rows.filter(r => r.workingTeam===recordTeamFilter);
+  if (withEmployeeFilter && recordEmployeeFilter) rows = rows.filter(r => r.maNV===recordEmployeeFilter);
+  if (withProductFilter && recordProductFilter) rows = rows.filter(r => r.maTP===recordProductFilter);
 
   // ---- 3) Sắp xếp: theo cột nếu sortable, ngược lại mặc định mới nhất trước ----
   if (sortable){
@@ -1217,11 +1239,11 @@ function renderRecordTable(allRows, config){
     rows.sort((a,b) => (b.date+String(b.start)).localeCompare(a.date+String(a.start)));
   }
 
-  // ---- 4) Phân trang (chỉ khi bật toolbar) ----
+  // ---- 4) Phân trang (độc lập với showToolbar — xem ghi chú withPagination ở trên) ----
   const totalFiltered = rows.length;
   let pageRows = rows;
   let totalPages = 1;
-  if (showToolbar){
+  if (withPagination){
     totalPages = Math.max(1, Math.ceil(totalFiltered/recordPageSize));
     if (recordPage > totalPages) recordPage = totalPages;
     if (recordPage < 1) recordPage = 1;
@@ -1229,16 +1251,24 @@ function renderRecordTable(allRows, config){
     pageRows = rows.slice(startIdx, startIdx+recordPageSize);
   }
 
-  // ---- 5) Toolbar (Tháng + Tìm kiếm) ----
-  const toolbarHtml = showToolbar ? `
+  // ---- 5) Toolbar (Tháng + Tìm kiếm + Tổ + Mã NV + Mã sản phẩm) ----
+  // Danh sách lựa chọn cho 3 dropdown mới lấy từ CHÍNH allRows (trước khi lọc) để không bị rụng option khi
+  // người dùng đang lọc dở — luôn thấy đủ các giá trị có thể chọn trong phạm vi trang đang xem.
+  const teamOptions = withTeamFilter ? [...new Set(allRows.map(r=>r.workingTeam).filter(Boolean))].sort() : [];
+  const employeeOptions = withEmployeeFilter ? [...new Map(allRows.map(r=>[r.maNV, r.ten])).entries()].sort((a,b)=>a[0].localeCompare(b[0])) : [];
+  const productOptions = withProductFilter ? [...new Map(allRows.filter(r=>r.maTP).map(r=>[r.maTP, r.tenTP||recordCatalogInfo(r).tenTP])).entries()].sort((a,b)=>a[0].localeCompare(b[0])) : [];
+  const toolbarHtml = showFilterBar ? `
     <div class="toolbar">
       ${withMonthFilter ? `<label style="margin:0;">Tháng:</label><input type="month" id="recordMonthInput" value="${recordMonthFilter}">` : ''}
-      <div class="search-wrap">
+      ${withTeamFilter ? `<label style="margin:0;">Tổ:</label><select id="recordTeamFilterSelect"><option value="">Tất cả Tổ</option>${teamOptions.map(t=>`<option value="${esc(t)}" ${recordTeamFilter===t?'selected':''}>${esc(t)}</option>`).join('')}</select>` : ''}
+      ${withEmployeeFilter ? `<label style="margin:0;">Mã NV:</label><select id="recordEmployeeFilterSelect"><option value="">Tất cả NV</option>${employeeOptions.map(([mv,tn])=>`<option value="${esc(mv)}" ${recordEmployeeFilter===mv?'selected':''}>${esc(mv)} — ${esc(tn)}</option>`).join('')}</select>` : ''}
+      ${withProductFilter ? `<label style="margin:0;">Mã SP:</label><select id="recordProductFilterSelect"><option value="">Tất cả SP</option>${productOptions.map(([mp,tp])=>`<option value="${esc(mp)}" ${recordProductFilter===mp?'selected':''}>${esc(mp)} — ${esc(tp||'')}</option>`).join('')}</select>` : ''}
+      ${withSearch ? `<div class="search-wrap">
         <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
         <input type="text" id="recordSearchInput" placeholder="Tìm Mã NV / Tên / Mã TP / Công đoạn" value="${esc(recordSearch)}">
-      </div>
+      </div>` : ''}
     </div>
-    <div class="hint" style="margin-bottom:10px;">${totalFiltered} kết quả${(recordSearch||withMonthFilter)?' (đã lọc)':''}</div>
+    <div class="hint" style="margin-bottom:10px;">${totalFiltered} kết quả${(recordSearch||withMonthFilter||recordTeamFilter||recordEmployeeFilter||recordProductFilter)?' (đã lọc)':''}</div>
   ` : '';
 
   // ---- 6) Bảng dữ liệu ----
@@ -1277,8 +1307,8 @@ function renderRecordTable(allRows, config){
   }).join('')}
   </tbody></table></div>` : '<div class="empty">Chưa có dữ liệu</div>';
 
-  // ---- 7) Thanh phân trang (chỉ khi bật toolbar và có dữ liệu) ----
-  const paginationHtml = (showToolbar && totalFiltered>0) ? `
+  // ---- 7) Thanh phân trang (độc lập với showToolbar — xem withPagination) ----
+  const paginationHtml = (withPagination && totalFiltered>0) ? `
     <div class="toolbar" style="margin-top:12px;justify-content:space-between;">
       <div style="display:flex;gap:8px;align-items:center;">
         <label style="margin:0;font-size:13px;">Số dòng/trang:</label>
@@ -1553,8 +1583,8 @@ function viewTeamDash(){
     </div>
 
     <div class="card">
-      <div class="section-title">Chi tiết Work Record (${rows.length})</div>
-      ${renderRecordTable(rows, {showToolbar:false})}
+      <div class="section-title">Chi tiết Work Record</div>
+      ${renderRecordTable(rows, {showToolbar:false, withPagination:true, withSearch:true, withTeamFilter:isAdmin, withEmployeeFilter:true, withProductFilter:true})}
     </div>
     <div class="card">
       <div class="section-title">Import Work Record (nhập liệu hàng loạt cho nhiều người)</div>
@@ -2235,7 +2265,7 @@ function viewAdminRecords(){
         <button class="btn btn-danger btn-sm" style="width:auto;" data-action="confirmClearAllRecords">🗑 Xoá sạch dữ liệu</button>
       </div>
     </div>
-    ${renderRecordTable(DB.workRecords, {withAdminActions:true, showToolbar:true, withMonthFilter:true, sortable:true})}
+    ${renderRecordTable(DB.workRecords, {withAdminActions:true, showToolbar:true, withMonthFilter:true, sortable:true, withTeamFilter:true, withEmployeeFilter:true, withProductFilter:true})}
   </div>`;
 }
 
@@ -2441,6 +2471,12 @@ function attachShellEvents(){
     const newInput = document.getElementById('recordSearchInput');
     if (newInput){ newInput.focus(); newInput.setSelectionRange(cursorPos, cursorPos); }
   });
+  const rTeam = document.getElementById('recordTeamFilterSelect');
+  if (rTeam) rTeam.addEventListener('change', e=>{ recordTeamFilter = e.target.value; recordPage = 1; render(); });
+  const rEmp = document.getElementById('recordEmployeeFilterSelect');
+  if (rEmp) rEmp.addEventListener('change', e=>{ recordEmployeeFilter = e.target.value; recordPage = 1; render(); });
+  const rProd = document.getElementById('recordProductFilterSelect');
+  if (rProd) rProd.addEventListener('change', e=>{ recordProductFilter = e.target.value; recordPage = 1; render(); });
   const rps = document.getElementById('recordPageSizeSelect');
   if (rps) rps.addEventListener('change', e=>{ recordPageSize = Number(e.target.value); recordPage = 1; render(); });
   const cs = document.getElementById('catalogSearchInput');
