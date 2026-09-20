@@ -534,7 +534,19 @@ async function apiCall(action, payload, _retriesLeft){
     lastApiOk = true; // cham duoc toi Server va nhan duoc JSON hop le (bat ke ok:true/false ve nghiep vu)
     // Tu dong dang xuat neu server tu choi xac thuc cho 1 request DA DANG NHAP (khong ap dung cho chinh action
     // 'login' — action nay tu xu ly loi cua rieng minh, khong phai dau hieu "phien het hieu luc").
-    if (result && result.ok===false && isAuthRejectedError(result.error) && action!=='login' && currentSession){
+    // QUAN TRONG (fix loi doi tai khoan bi "da" ve login oan): 1 request co the ve TRE (mang cham/Apps Script
+    // "danh thuc") SAU KHI nguoi dung da Logout va Login lai bang tai khoan KHAC — request tre do van mang
+    // session CUA TAI KHOAN CU trong payload, khong lien quan gi den phien MOI dang dung. Truoc day code chi
+    // kiem tra "currentSession co ton tai khong" (bat ke cua ai) nen 1 request tra loi tre/sai cua tai khoan CU
+    // co the huy oan phien cua tai khoan MOI, dang du dung binh thuong, bi da ve man hinh dang nhap bat ngo —
+    // day CHINH LA nguyen nhan gay cam giac "doi tai khoan xong web khong load / bi dang xuat vo co". Sua bang
+    // cach CHI tu dong dang xuat khi request bi tu choi nay THUC SU thuoc ve phien dang active hien tai (so
+    // dung ca maNV lan passwordHash cua request voi currentSession luc nay, khong chi kiem tra "co session hay khong").
+    const payloadSession = payload && payload.session;
+    const belongsToCurrentSession = !!(payloadSession && currentSession
+      && String(payloadSession.maNV)===String(currentSession.maNV)
+      && String(payloadSession.passwordHash)===String(currentSession.passwordHash));
+    if (result && result.ok===false && isAuthRejectedError(result.error) && action!=='login' && belongsToCurrentSession){
       currentSession = null;
       localStorage.removeItem(CONDOR_SESSION_KEY);
       sessionStorage.removeItem(CONDOR_SESSION_KEY);
