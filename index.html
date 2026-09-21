@@ -627,15 +627,21 @@ function setLastSyncAt(ts){ localStorage.setItem(CONDOR_LASTSYNC_KEY, String(ts)
 /* Sau khi đăng nhập thành công qua API, đồng bộ lại DB.employees/DB.teams từ Google Sheets (nguồn dùng chung),
    thay cho dữ liệu cục bộ cũ — để mọi người cùng thấy đúng 1 danh sách. */
 async function syncEmployeesAndTeamsFromAPI(session){
-  const empResult = await apiCall('listEmployees', { session });
+  // 5 request nay DOC LAP voi nhau (khong request nao can ket qua cua request kia) — goi SONG SONG bang
+  // Promise.all thay vi tuan tu tung cai, giam thoi gian cho tu "tong 5 lan cho" xuong con "1 lan cho lau nhat"
+  // (vd Apps Script vua "thuc day" mat 20-30s cho MOI request neu goi tuan tu se cong don rat lau, gay cam giac
+  // dang nhap "dung hinh/khong phan hoi" — day la nguyen nhan chinh gay cham, khong phai loi JS bi treo).
+  const [empResult, teamResult, catalogResult, workRecordResult, stdTimeResult] = await Promise.all([
+    apiCall('listEmployees', { session }),
+    apiCall('listTeams', { session }),
+    apiCall('listCatalog', { session }),
+    apiCall('listWorkRecords', { session }),
+    apiCall('listProductStdTimes', { session }),
+  ]);
   if (empResult && empResult.ok) DB.employees = empResult.employees;
-  const teamResult = await apiCall('listTeams', { session });
   if (teamResult && teamResult.ok) DB.teams = teamResult.teams;
-  const catalogResult = await apiCall('listCatalog', { session });
   if (catalogResult && catalogResult.ok) DB.workCatalog = catalogResult.catalog;
-  const workRecordResult = await apiCall('listWorkRecords', { session });
   if (workRecordResult && workRecordResult.ok) DB.workRecords = workRecordResult.workRecords;
-  const stdTimeResult = await apiCall('listProductStdTimes', { session });
   if (stdTimeResult && stdTimeResult.ok) DB.productStandardTimes = stdTimeResult.productStdTimes;
   if (empResult && empResult.ok) setLastSyncAt(Date.now()); // coi "dong bo thanh cong" = it nhat lay duoc danh sach Nhan vien moi nhat
   saveDB();
@@ -2861,9 +2867,24 @@ function attachLoginEvents(){
       const apiResult = await apiCall('login', { maNV, passwordHash: hash });
       if (apiResult){
         if (!apiResult.ok){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${esc(apiResult.error||'Đăng nhập thất bại.')}</div>`; return; }
-        await syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash });
+        // Neu tai khoan nay DA co san du lieu cuc bo tren may nay (vd tung dang nhap truoc do, hoac vua co
+        // nguoi khac dang nhap va DB.employees con dang chua ban ghi nay) -> vao thang Dashboard NGAY, khong
+        // bat nguoi dung nhin man hinh "dung hinh" cho het 5 request dong bo (Nhan vien/To/Danh muc/Cong viec/
+        // TG chuan) moi xong. Dong bo van chay NGAM sau do va tu ve lai khi xong (neu van con dang o phien nay).
+        // Chi nhung tai khoan CHUA TUNG dang nhap tren may nay (khong co du lieu cuc bo) moi phai cho dong bo
+        // xong truoc, vi neu khong currentUser() se khong tim thay va bi day nguoc ve man hinh dang nhap.
+        const knownLocally = DB.employees.some(e=>e.maNV===maNV);
         login(maNV, remember, hash);
-        route = 'dashboard'; render();
+        if (knownLocally){
+          route = 'dashboard'; render();
+          syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash }).then(()=>{
+            // Chi ve lai neu nguoi dung van dang o dung phien nay luc dong bo xong (chua logout/doi tai khoan khac trong luc cho).
+            if (currentSession && currentSession.maNV===maNV) render();
+          }).catch(()=>{});
+        } else {
+          await syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash });
+          route = 'dashboard'; render();
+        }
         return;
       }
       // apiCall() tra ve null: HOẶC chua cau hinh API_URL (luon nhu vay, dung che do cuc bo binh thuong — KHONG
