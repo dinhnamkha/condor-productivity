@@ -309,7 +309,48 @@ async function loadDB(){
   if (!Array.isArray(DB.productStandardTimes)) DB.productStandardTimes = []; // truoc khi co tinh nang Tong hop To
   delete DB.products; delete DB.processes; delete DB.standardTimes; delete DB.indirectWorkTypes;
 }
-function saveDB(){ localStorage.setItem(CONDOR_DB_KEY, JSON.stringify(DB)); }
+/* LUU CUC BO GON NHE (2026-09-29): localStorage chi chua duoc ~5 trieu ky tu/trang web. Truoc day luu TOAN BO
+   Work Record (~400 ky tu/ban ghi) nen voi 50 nguoi dung, sau ~1-1.5 thang se day va saveDB() nem loi lam treo app.
+   Khi co API dung chung (API_URL), Google Sheet moi la nguon du lieu that — trinh duyet chi can giu:
+   Nhan vien/To/Danh muc/TG chuan SP + Work Record CUA CHINH MINH trong THANG HIEN TAI + ban ghi dang cho gui
+   (hang doi mat mang) + 100 dong Audit Log cuc bo gan nhat. Du lieu cac thang khac tai lai tu Server khi can
+   (xem maybeLoadRecordsForView). Neu van qua gioi han thi bo dan tung phan, KHONG BAO GIO nem loi ra ngoai.
+   Che do cuc bo hoan toan (API_URL trong) van luu day du nhu cu vi khong co noi nao khac chua du lieu. */
+const LOCAL_AUDIT_KEEP = 100;
+function queuedRecordIds(){
+  const ids = new Set();
+  getSyncQueue().forEach(q=>{
+    const p = q.payload || {};
+    if (p.record && p.record.id) ids.add(p.record.id);
+    if (q.action==='editWorkRecord' && p.id) ids.add(p.id);
+  });
+  return ids;
+}
+function buildPersistableDB(level){
+  if (!API_URL) return DB;
+  const me = currentSession ? currentSession.maNV : null;
+  const month = todayStr().slice(0,7);
+  const queued = queuedRecordIds();
+  const copy = Object.assign({}, DB);
+  copy.workRecords = (DB.workRecords||[]).filter(r=> queued.has(r.id)
+    || (level===0 && me!==null && r.maNV===me && String(r.date||'').startsWith(month)));
+  copy.auditLogs = level===0 ? (DB.auditLogs||[]).slice(-LOCAL_AUDIT_KEEP) : [];
+  if (level>=2){ copy.workCatalog = []; copy.workCatalogVersion = null; } // Danh muc se tai lai tu Server o lan dang nhap/lam moi tiep theo
+  return copy;
+}
+function saveDB(){
+  for (let level=0; level<=2; level++){
+    try { localStorage.setItem(CONDOR_DB_KEY, JSON.stringify(buildPersistableDB(level))); return; }
+    catch(err){ if (!API_URL) break; }
+  }
+  if (API_URL){
+    // Van khong luu duoc (bo nho trinh duyet gan day vi ly do khac) — xoa ban cu de lan tai sau khong doc du lieu
+    // lech, du lieu that van nam tren Google Sheet.
+    try { localStorage.removeItem(CONDOR_DB_KEY); } catch(e){}
+  } else {
+    try { showToast('⚠️ Bộ nhớ trình duyệt đã đầy — không lưu được dữ liệu cục bộ. Hãy Xuất Backup ngay.', true); } catch(e){}
+  }
+}
 
 async function ensureSeedPasswords(){
   if (!DB._seedPasswordsPending) return;
@@ -326,7 +367,12 @@ async function sha256(str){
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
-function todayStr(){ return new Date().toISOString().slice(0,10); }
+/* Ngày hôm nay theo giờ VIỆT NAM (UTC+7, không có giờ mùa hè) — KHÔNG dùng toISOString() trực tiếp (đó là giờ UTC:
+   từ 00:00 đến 07:00 sáng giờ VN sẽ ra ngày HÔM QUA, làm ca đêm không nộp được bản ghi "hôm nay"). CLAUDE.md §25. */
+const VN_OFFSET_MS = 7*3600*1000;
+function todayStr(){ return new Date(Date.now() + VN_OFFSET_MS).toISOString().slice(0,10); }
+/* Cộng/trừ ngày trên chuỗi yyyy-mm-dd, tính hoàn toàn theo UTC để không lệch ngày theo múi giờ của máy. */
+function addDaysStr(dateStr, days){ const d = new Date(dateStr+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+days); return d.toISOString().slice(0,10); }
 function monthStartStr(){ return todayStr().slice(0,7)+'-01'; }
 function minToHHMM(m){ const h=Math.floor(m/60)%24, mm=m%60; return String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0'); }
 function hhmmToMin(s){ const [h,m]=s.split(':').map(Number); return h*60+m; }
@@ -491,11 +537,11 @@ let lastApiOk = null;
 let lastApiTimedOut = false; // true neu lan apiCall() gan nhat bi huy do vuot API_TIMEOUT_MS (server qua cham/khong phan hoi)
 /* Neu Server tra ve { busy:true } (LockService het thoi gian cho vi qua nhieu nguoi ghi cung luc — tam thoi,
    KHONG phai bi tu choi that su), tu dong thu lai vai lan truoc khi tra ve cho noi goi — tranh nguoi dung phai
-   tu bam lai thu cong hoac (te hon) mat thao tac vi apiCallOrQueue coi day la "bi tu choi", khong dua vao hang doi. */
+   tu bam lai thu cong hoac (te hon) mat thao tac vi apiWrite coi day la "bi tu choi", khong dua vao hang doi. */
 /* Thanh trang thai toan cuc (globalLoadingBar) — dem so request dang cho (pendingApiCalls) de xu ly dung
    truong hop goi long nhau/thu lai (busy retry o duoi) van khong tat thanh som. Dat o day (khong phai
-   trong apiCallOrQueue) de bat duoc CA syncPendingQueue()/syncEmployeesAndTeamsFromAPI() goi apiCall() truc
-   tiep, khong chi thao tac ghi qua apiCallOrQueue(). */
+   trong apiWrite) de bat duoc CA syncPendingQueue()/syncEmployeesAndTeamsFromAPI() goi apiCall() truc
+   tiep, khong chi thao tac ghi qua apiWrite(). */
 let pendingApiCalls = 0;
 function updateGlobalLoadingBar(){
   const bar = document.getElementById('globalLoadingBar');
@@ -516,9 +562,19 @@ function isAuthRejectedError(msg){
    thuong, chi la cham), nhung PHAI co timeout de khong bao gio "treo vo han" ma khong co phan hoi gi ca — dat
    35s, du rong cho truong hop "danh thuc" nhung van dam bao cuoi cung LUON co ket qua (thanh cong/loi) hien ra. */
 const API_TIMEOUT_MS = 35000;
+/* Server tra ve busy:true khi khong xin duoc khoa GHI trong 10s (nhieu nguoi ghi cung luc). Thu lai toi da
+   API_BUSY_MAX_RETRIES lan, gian cach tang dan + ngau nhien (tranh 50 may cung thu lai dung 1 thoi diem va lai
+   dung do nhau). Noi goi co the dang ky apiBusyListener de bao cho nguoi dung biet "dang xep hang" thay vi
+   de ho tuong app bi treo. */
+const API_BUSY_MAX_RETRIES = 6;
+let apiBusyListener = null; // function(attempt, maxAttempts) | null
+function busyBackoffMs(attempt){
+  const base = Math.min(8000, 1000*Math.pow(1.6, attempt-1));
+  return Math.round(base * (0.6 + Math.random()*0.8));
+}
 async function apiCall(action, payload, _retriesLeft){
   if (!API_URL) return null;
-  if (_retriesLeft===undefined) _retriesLeft = 2;
+  if (_retriesLeft===undefined) _retriesLeft = API_BUSY_MAX_RETRIES;
   lastApiTimedOut = false;
   pendingApiCalls++; updateGlobalLoadingBar();
   const controller = new AbortController();
@@ -528,7 +584,9 @@ async function apiCall(action, payload, _retriesLeft){
     if (!res.ok) { lastApiOk = false; return null; }
     const result = await res.json();
     if (result && result.busy && _retriesLeft>0){
-      await sleepMs(1200);
+      const attempt = API_BUSY_MAX_RETRIES - _retriesLeft + 1;
+      if (apiBusyListener){ try { apiBusyListener(attempt, API_BUSY_MAX_RETRIES); } catch(e){} }
+      await sleepMs(busyBackoffMs(attempt));
       return await apiCall(action, payload, _retriesLeft-1);
     }
     lastApiOk = true; // cham duoc toi Server va nhan duoc JSON hop le (bat ke ok:true/false ve nghiep vu)
@@ -565,7 +623,10 @@ async function apiCall(action, payload, _retriesLeft){
   }
 }
 
-/* ---------------- Hàng đợi đồng bộ (Sync Queue) ----------------
+/* ---------------- Hàng đợi đồng bộ (Sync Queue) — CHỈ CÒN ĐỂ GỬI NỐT dữ liệu cũ ----------------
+   Từ 2026-09-29 KHÔNG còn đưa thao tác mới vào hàng đợi (BR-292 — xem apiWrite). Phần dưới chỉ giữ lại để gửi
+   nốt các thao tác đã nằm sẵn trong hàng đợi trên máy người dùng từ phiên bản trước (tránh mất dữ liệu của họ).
+   Mô tả gốc: 
    Khi 1 thao tác GHI qua API thất bại vì KHÔNG KẾT NỐI ĐƯỢC (mất mạng, API_URL chưa cấu hình, CORS...) —
    KHÁC với bị server từ chối có lý do (sai quyền, trùng khoá...), trường hợp đó thử lại cũng sẽ sai y hệt
    nên KHÔNG đưa vào hàng đợi — ghi lại thao tác đó, tự động gửi lại khi có mạng trở lại (sự kiện 'online'
@@ -576,17 +637,16 @@ function getSyncQueue(){
   try { return JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY)) || []; } catch(err){ return []; }
 }
 function saveSyncQueue(q){ localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(q)); }
-function queueForSync(action, payload){
-  const q = getSyncQueue();
-  q.push({ id: uid(), action, payload, queuedAt: Date.now() });
-  saveSyncQueue(q);
-}
-/* Bọc apiCall() cho MỌI thao tác GHI: nếu apiCall thất bại vì không kết nối được (trả về null) VÀ đã có
-   cấu hình API_URL (tức đúng ra phải gọi được, chỉ là tạm thời mất mạng) — tự động đưa vào hàng đợi.
-   Trả về y hệt kết quả apiCall (null hoặc {ok,...}) để nơi gọi không cần đổi logic xử lý fallback cục bộ. */
-async function apiCallOrQueue(action, payload){
+/* BR-292 (ĐÃ CHỐT: KHÔNG offline) — Bọc apiCall() cho MỌI thao tác GHI. Khi đã cấu hình API_URL mà không kết nối
+   được (mất mạng/timeout/máy chủ lỗi) thì trả về 1 kết quả THẤT BẠI rõ ràng ({ok:false, offline:true}) — mọi nơi
+   gọi đã có sẵn nhánh "if (apiResult && !apiResult.ok)" để hoàn tác thay đổi cục bộ + báo lỗi, nên thao tác KHÔNG
+   bị coi là đã lưu. Trước đây thao tác được đưa vào hàng đợi và báo "thành công" dù Server chưa nhận (trái BR-292,
+   và Import/Duyệt gửi bù sau đó có thể ghi đè dữ liệu mới hơn của người khác). Chỉ khi KHÔNG cấu hình API_URL
+   (chế độ cục bộ hoàn toàn) mới trả null để nơi gọi dùng logic cục bộ như cũ. */
+const OFFLINE_WRITE_ERROR = 'Không kết nối được máy chủ (mất mạng hoặc máy chủ không phản hồi) — thao tác CHƯA được lưu. Kiểm tra kết nối rồi thử lại.';
+async function apiWrite(action, payload){
   const result = await apiCall(action, payload);
-  if (result===null && API_URL) queueForSync(action, payload);
+  if (result===null && API_URL) return { ok:false, offline:true, error: OFFLINE_WRITE_ERROR };
   return result;
 }
 /* Gửi lại toàn bộ hàng đợi — gọi khi có mạng trở lại hoặc bấm "Làm mới dữ liệu". Mục đã gửi thành công
@@ -626,7 +686,135 @@ function setLastSyncAt(ts){ localStorage.setItem(CONDOR_LASTSYNC_KEY, String(ts)
 
 /* Sau khi đăng nhập thành công qua API, đồng bộ lại DB.employees/DB.teams từ Google Sheets (nguồn dùng chung),
    thay cho dữ liệu cục bộ cũ — để mọi người cùng thấy đúng 1 danh sách. */
+/* ---------- Tai Work Record theo THANG (2026-09-29) ----------
+   Server chi tra Work Record trong pham vi quyen (Nhan vien: cua minh; To truong: To minh; Admin: tat ca) va
+   trong khoang ngay yeu cau. Luc dang nhap chi tai THANG HIEN TAI + moi ban ghi Cho duyet. Khi nguoi dung chon
+   xem thang/khoang ngay khac, maybeLoadRecordsForView() tu tai them dung khoang do roi ve lai man hinh. */
+let loadedRecordMonths = new Set(); // cac thang 'yyyy-mm' da tai day du tu Server trong phien nay
+let allRecordsLoaded = false;       // da tai TOAN BO (nguoi dung chon "tat ca thang")
+let recordLoadInFlight = null;      // khoa dang tai (tranh goi trung)
+const recordLoadFailedAt = {};      // khoa -> thoi diem loi gan nhat (tranh lap goi lien tuc khi Server loi)
+let adminSummaryFetchedAt = 0;
+let adminSummaryInFlight = false;
+function lastDayOfMonthStr(yyyymm){ return yyyymm + '-' + String(daysInMonth(yyyymm)).padStart(2,'0'); }
+function monthsInRange(fromStr, toStr){
+  const out = [];
+  if (!fromStr || !toStr || fromStr > toStr) return out;
+  let [y, m] = fromStr.slice(0,7).split('-').map(Number);
+  const [ty, tm] = toStr.slice(0,7).split('-').map(Number);
+  let guard = 0;
+  while ((y<ty || (y===ty && m<=tm)) && guard<60){
+    out.push(y + '-' + String(m).padStart(2,'0'));
+    m++; if (m>12){ m=1; y++; }
+    guard++;
+  }
+  return out;
+}
+function recordsBootstrapFromDate(){ return monthStartStr(); }
+/* Phien ban Danh muc dang giu (chi khi thuc su con du lieu Danh muc cuc bo) — gui kem de Server bo qua gui lai neu khong doi. */
+function knownCatalogVersion(){ return (DB && DB.workCatalogVersion && Array.isArray(DB.workCatalog) && DB.workCatalog.length) ? DB.workCatalogVersion : ''; }
+/* Giu lai ban ghi cuc bo dang nam trong hang doi (chua gui duoc len Server) khi thay bang du lieu Server. */
+function mergeServerRecords(serverRecords, replaceFilter){
+  const queued = queuedRecordIds();
+  const serverIds = new Set(serverRecords.map(r=>r.id));
+  const kept = DB.workRecords.filter(r=> (!replaceFilter(r) || queued.has(r.id)) && !serverIds.has(r.id));
+  DB.workRecords = kept.concat(serverRecords);
+}
+function applyBootstrapData(data){
+  if (Array.isArray(data.employees)) DB.employees = data.employees;
+  if (Array.isArray(data.teams)) DB.teams = data.teams;
+  if (Array.isArray(data.catalog)){ DB.workCatalog = data.catalog; DB.workCatalogVersion = data.catalogVersion || null; }
+  // catalogUnchanged: Server xac nhan Danh muc dang giu van dung phien ban moi nhat -> giu nguyen, khong tai lai
+  if (Array.isArray(data.productStdTimes)) DB.productStandardTimes = data.productStdTimes;
+  if (Array.isArray(data.workRecords)){
+    mergeServerRecords(data.workRecords, ()=>true);
+    loadedRecordMonths = new Set([todayStr().slice(0,7)]);
+    allRecordsLoaded = false;
+  }
+  if (data.adminSummary){ DB.adminSummary = data.adminSummary; adminSummaryFetchedAt = Date.now(); }
+  if (Array.isArray(data.employees)) setLastSyncAt(Date.now());
+  saveDB();
+}
+/* Tai Work Record trong [fromDate, toDate] (all=true: toan bo) va thay the dung khoang do trong DB cuc bo.
+   Tra ve true neu thanh cong. Dung chung cho maybeLoadRecordsForView() va Import Work Record. */
+async function fetchRecordRange(fromDate, toDate, all){
+  const session = currentSession;
+  if (!API_URL || !session) return false;
+  const res = await apiCall('listWorkRecords', { session, fromDate: all?'':fromDate, toDate: all?'':toDate });
+  if (!res || !res.ok) return false;
+  if (!currentSession || currentSession.maNV!==session.maNV) return false; // da doi tai khoan trong luc cho
+  mergeServerRecords(res.workRecords||[], r=> all ? true : (r.date>=fromDate && r.date<=toDate));
+  if (all) allRecordsLoaded = true;
+  else monthsInRange(fromDate, toDate).forEach(m=>loadedRecordMonths.add(m));
+  saveDB();
+  return true;
+}
+/* Dam bao cac thang can thiet da duoc tai (awaitable). */
+async function ensureRecordMonthsLoaded(months){
+  if (!API_URL || !currentSession || allRecordsLoaded) return true;
+  const missing = months.filter(m=> /^\d{4}-\d{2}$/.test(m) && !loadedRecordMonths.has(m)).sort();
+  if (!missing.length) return true;
+  return await fetchRecordRange(missing[0]+'-01', lastDayOfMonthStr(missing[missing.length-1]), false);
+}
+/* Thang/khoang ngay ma man hinh hien tai dang can. null = man hinh khong can them du lieu Work Record. */
+function requiredRecordScope(){
+  const u = currentUser();
+  if (!u) return null;
+  switch(route){
+    case 'dashboard':
+      if (u.role==='Admin') return null;
+      return { months: [dashboardMode==='month' ? dashboardMonthValue : String(dashboardDayValue||'').slice(0,7)] };
+    case 'entry': return entryState && entryState.date ? { months: [String(entryState.date).slice(0,7)] } : null;
+    case 'history': return recordMonthFilter ? { months:[recordMonthFilter] } : { all:true };
+    case 'teamdash': return { months: monthsInRange(window._tdFrom||monthStartStr(), window._tdTo||todayStr()) };
+    case 'teamsummary': return { months: monthsInRange(window._tsFrom||monthStartStr(), window._tsTo||todayStr()) };
+    case 'admin': return adminTab==='records' ? (recordMonthFilter ? { months:[recordMonthFilter] } : { all:true }) : null;
+    default: return null;
+  }
+}
+/* Goi o dau moi lan render(): neu man hinh can thang chua tai -> tai ngam roi render() lai. */
+function maybeLoadRecordsForView(){
+  if (!API_URL || !currentSession) return;
+  const u = currentUser();
+  if (u && u.role==='Admin' && route==='dashboard' && !adminSummaryInFlight
+      && Date.now()-adminSummaryFetchedAt > 60000 && !(recordLoadFailedAt.summary && Date.now()-recordLoadFailedAt.summary < 30000)){
+    adminSummaryInFlight = true;
+    apiCall('adminSummary', { session: currentSession }).then(res=>{
+      adminSummaryInFlight = false;
+      if (res && res.ok){ DB.adminSummary = res.adminSummary; adminSummaryFetchedAt = Date.now(); if (route==='dashboard') render(); }
+      else recordLoadFailedAt.summary = Date.now();
+    });
+  }
+  const need = requiredRecordScope();
+  if (!need || allRecordsLoaded) return;
+  let fromDate = '', toDate = '';
+  if (!need.all){
+    const missing = need.months.filter(m=> /^\d{4}-\d{2}$/.test(m) && !loadedRecordMonths.has(m)).sort();
+    if (!missing.length) return;
+    fromDate = missing[0]+'-01'; toDate = lastDayOfMonthStr(missing[missing.length-1]);
+  }
+  const key = need.all ? 'ALL' : fromDate+'_'+toDate;
+  if (recordLoadInFlight===key) return;
+  if (recordLoadFailedAt[key] && Date.now()-recordLoadFailedAt[key] < 30000) return;
+  recordLoadInFlight = key;
+  fetchRecordRange(fromDate, toDate, !!need.all).then(ok=>{
+    recordLoadInFlight = null;
+    if (!ok){
+      recordLoadFailedAt[key] = Date.now();
+      showToast('Không tải được dữ liệu Work Record của khoảng thời gian này — bấm "Làm mới dữ liệu" để thử lại.', true);
+    }
+    if (currentSession) render();
+  });
+}
+
+/* Dong bo du lieu dung chung — 1 REQUEST DUY NHAT (action "bootstrap") thay cho 5 request rieng le truoc day.
+   Neu Server van la ban cu (chua co action bootstrap) thi tu dong dung lai cach cu (syncFromApiLegacy). */
 async function syncEmployeesAndTeamsFromAPI(session){
+  const res = await apiCall('bootstrap', { session, fromDate: recordsBootstrapFromDate(), catalogVersion: knownCatalogVersion() });
+  if (res && res.ok){ applyBootstrapData(res); return; }
+  if (res && res.ok===false && String(res.error||'').indexOf('Không rõ action')!==-1) await syncFromApiLegacy(session);
+}
+async function syncFromApiLegacy(session){
   // 5 request nay DOC LAP voi nhau (khong request nao can ket qua cua request kia) — goi SONG SONG bang
   // Promise.all thay vi tuan tu tung cai, giam thoi gian cho tu "tong 5 lan cho" xuong con "1 lan cho lau nhat"
   // (vd Apps Script vua "thuc day" mat 20-30s cho MOI request neu goi tuan tu se cong don rat lau, gay cam giac
@@ -640,8 +828,8 @@ async function syncEmployeesAndTeamsFromAPI(session){
   ]);
   if (empResult && empResult.ok) DB.employees = empResult.employees;
   if (teamResult && teamResult.ok) DB.teams = teamResult.teams;
-  if (catalogResult && catalogResult.ok) DB.workCatalog = catalogResult.catalog;
-  if (workRecordResult && workRecordResult.ok) DB.workRecords = workRecordResult.workRecords;
+  if (catalogResult && catalogResult.ok) { DB.workCatalog = catalogResult.catalog; DB.workCatalogVersion = null; }
+  if (workRecordResult && workRecordResult.ok){ DB.workRecords = workRecordResult.workRecords; allRecordsLoaded = true; } // Server cu tra TOAN BO
   if (stdTimeResult && stdTimeResult.ok) DB.productStandardTimes = stdTimeResult.productStdTimes;
   if (empResult && empResult.ok) setLastSyncAt(Date.now()); // coi "dong bo thanh cong" = it nhat lay duoc danh sach Nhan vien moi nhat
   saveDB();
@@ -839,7 +1027,7 @@ function renderShell(bodyHtml){
         <h1 class="page-title">${esc(pageTitle)}</h1>
         <button class="offline-pill${pendingCount>0?' has-pending':''}" data-action="hardReload" title="${esc(reloadTitle)}">${esc(reloadLabel)}</button>
       </header>
-      <main>${bodyHtml}</main>
+      <main>${recordLoadInFlight ? '<div class="banner" style="margin-bottom:12px;">⏳ Đang tải dữ liệu Work Record của khoảng thời gian đang xem...</div>' : ''}${bodyHtml}</main>
     </div>
   </div>
   <div class="bottomtabs">${bottomnav}</div>
@@ -866,7 +1054,7 @@ function viewLogin(){
       </div>
       <div class="checkline"><input type="checkbox" id="loginRemember" checked> Ghi nhớ đăng nhập trên thiết bị này</div>
       <button class="btn btn-primary" id="btnLogin">Đăng nhập</button>
-      <div class="banner">Tài khoản mặc định: <b>Admin</b> / mật khẩu <b>Admin</b>. Vào mục Quản trị để thêm Tổ, Nhân viên...</div>
+      ${API_URL ? '' : '<div class="banner">Chế độ cục bộ (chưa kết nối máy chủ): tài khoản mặc định <b>Admin</b> / mật khẩu <b>Admin</b>. Vào mục Quản trị để thêm Tổ, Nhân viên...</div>'}
       ${(!window.crypto || !window.crypto.subtle) ? '<div class="banner" style="margin-top:10px;">⚠️ Trình duyệt hiện tại không hỗ trợ Web Crypto API (crypto.subtle) — không thể đăng nhập. Hãy mở file này bằng Chrome/Edge/Firefox bản mới.</div>' : ''}
       <div style="text-align:center;margin-top:14px;"><a href="#" id="resetToDefault" style="font-size:12.5px;color:#94a3b8;text-decoration:underline;">Không đăng nhập được? Đặt lại dữ liệu về mặc định</a></div>
     </div>
@@ -1047,14 +1235,19 @@ function fmtDateVN(s){ const [y,m,d]=s.split('-'); return `${d}/${m}/${y}`; }
    cả viewAdminDashboard() (vẽ số liệu) và initAdminDashboardChart() (vẽ biểu đồ) lấy từ ĐÚNG 1 NGUỒN. Rejected
    vẫn được ĐẾM ở đây (Data Status cần biết cả Rejected) nhưng KHÔNG được tính vào Năng suất (dùng
    productivityForRows() đã tự loại Rejected — khớp quy ước toàn hệ thống). */
+/* Khi co API dung chung, Client KHONG con giu toan bo Work Record (chi thang dang xem) — so lieu TOAN HE THONG
+   lay tu DB.adminSummary do Server tinh san (action adminSummary/bootstrap). Chi tu tinh cuc bo khi khong co API. */
+function serverAdminSummary(){ return (API_URL && DB.adminSummary) ? DB.adminSummary : null; }
 function getAdminSystemStats(){
   const employees = DB.employees.filter(e=>e.role!=='Admin');
   const teams = DB.teams;
+  const s = serverAdminSummary();
+  if (s) return { employees, teams, totalRecords: s.totalRecords, approvedCount: s.approvedCount, pendingCount: s.pendingCount, rejectedCount: s.rejectedCount };
   const workRecords = DB.workRecords;
   const approvedCount = workRecords.filter(r=>r.status==='Approved').length;
   const pendingCount = workRecords.filter(r=>r.status==='Pending').length;
   const rejectedCount = workRecords.filter(r=>r.status==='Rejected').length;
-  return { employees, teams, workRecords, approvedCount, pendingCount, rejectedCount };
+  return { employees, teams, totalRecords: workRecords.length, approvedCount, pendingCount, rejectedCount };
 }
 /* Bảng "Team Productivity Overview" — mỗi dòng 1 Tổ, Năng suất BẮT BUỘC dùng công thức gộp
    productivityForRows() (SUM(TGChuan*SL)/SUM(ActualTime)*100), KHÔNG dùng trung bình cộng. */
@@ -1064,9 +1257,18 @@ function getAdminTeamOverviewRows(){
     const roster = DB.employees.filter(e=> e.role!=='Admin' && e.employeeTeam===t.name);
     const todaySubmitted = new Set(DB.workRecords.filter(r=> r.workingTeam===t.name && r.date===today).map(r=>r.maNV));
     const submitted = roster.filter(e=>todaySubmitted.has(e.maNV)).length;
-    const teamDirectRows = DB.workRecords.filter(r=> r.workingTeam===t.name && r.workType==='Direct' && r.status!=='Rejected');
-    const productivity = productivityForRows(teamDirectRows);
-    const pending = DB.workRecords.filter(r=> r.workingTeam===t.name && r.status==='Pending').length;
+    const s = serverAdminSummary();
+    let productivity, pending;
+    if (s){
+      // Cung cong thuc gop SUM(TGChuan*SL)/SUM(ActualTime)*100 — tong da cong san o Server tren toan bo du lieu.
+      const st = s.teams && s.teams[t.name];
+      productivity = st && st.actualMin>0 ? fmt1(st.stdMin/st.actualMin*100) : null;
+      pending = st ? st.pending : 0;
+    } else {
+      const teamDirectRows = DB.workRecords.filter(r=> r.workingTeam===t.name && r.workType==='Direct' && r.status!=='Rejected');
+      productivity = productivityForRows(teamDirectRows);
+      pending = DB.workRecords.filter(r=> r.workingTeam===t.name && r.status==='Pending').length;
+    }
     return { name: t.name, employeeCount: roster.length, submitted, missing: roster.length-submitted, productivity, pending };
   });
 }
@@ -1075,6 +1277,11 @@ function getAdminTeamOverviewRows(){
    trường này (thường do Import lặp) được tính là dư thừa. Đây CHỈ là số liệu hiển thị (read-only), không tự
    động sửa/xoá gì — khớp nguyên tắc "phát hiện lỗi thì báo, không tự sửa" của nhiệm vụ. */
 function getAdminDataQuality(){
+  const s = serverAdminSummary();
+  if (s){
+    const employeesWithoutTeam = DB.employees.filter(e=> e.role!=='Admin' && !e.employeeTeam).length;
+    return { missingStdTime: s.missingStdTime, duplicateRecords: s.duplicateRecords, employeesWithoutTeam, pendingOver24h: s.pendingOver24h };
+  }
   const now = Date.now();
   const missingStdTime = DB.workRecords.filter(r=>r.needsStandardTime).length;
   const groups = {};
@@ -1119,7 +1326,7 @@ function viewAdminDashboard(){
       <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box emerald">${kpiIcon('box')}</div>
         <div><div class="l">Tổng số Tổ</div><div class="v">${stats.teams.length}</div></div></div></div>
       <div class="kpi"><div class="kpi-icon-row"><div class="kpi-icon-box violet">${kpiIcon('clock')}</div>
-        <div><div class="l">Work Record</div><div class="v">${stats.workRecords.length}</div></div></div></div>
+        <div><div class="l">Work Record</div><div class="v">${stats.totalRecords}</div></div></div></div>
       <div class="kpi" style="cursor:pointer;" data-route="approve" title="Bấm để mở danh sách Chờ duyệt">
         <div class="kpi-icon-row"><div class="kpi-icon-box amber">${kpiIcon('alert')}</div>
         <div><div class="l">Chờ duyệt</div><div class="v">${stats.pendingCount}</div></div></div></div>
@@ -1127,7 +1334,7 @@ function viewAdminDashboard(){
 
     <div class="card">
       <div class="section-title">Trạng thái Dữ liệu (toàn hệ thống)</div>
-      ${stats.workRecords.length>0 ? `
+      ${stats.totalRecords>0 ? `
       <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
         <div style="width:150px;height:150px;position:relative;flex:none;"><canvas id="adminDashboardChart"></canvas></div>
         <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:8px;">
@@ -1281,7 +1488,8 @@ function viewEntry(){
       <div class="field" style="margin-bottom:0;"><label>Ghi chú <span class="hint" style="display:inline;margin:0;">(không bắt buộc)</span></label>
         <input type="text" id="entryNote" placeholder="Ghi chú thêm nếu cần..." value="${esc(s.note||'')}"></div>
     </div>
-    <button class="btn btn-primary" data-action="submitEntry">Lưu dữ liệu</button>
+    ${s.errors.submit?`<div class="err" style="margin-bottom:10px;">${esc(s.errors.submit)}</div>`:''}
+    <button class="btn btn-primary" data-action="submitEntry" ${s.submitting?'disabled':''}>${s.submitting?'⏳ Đang lưu...':'Lưu dữ liệu'}</button>
   `);
 }
 
@@ -1466,11 +1674,11 @@ function statusPill(r){
 let approveSelection = new Set();
 function viewApprove(){
   const u = currentUser();
-  const scope = u.role==='Admin' ? null : teamLedBy(u.maNV);
-  const pending = DB.workRecords.filter(r=> r.status==='Pending' && (scope? r.workingTeam===scope : true))
+  const scope = leaderScope(u);
+  const pending = DB.workRecords.filter(r=> r.status==='Pending' && inTeamScope(scope, r.workingTeam))
     .sort((a,b)=> a.createdAt - b.createdAt);
   return renderShell(`
-    <div class="section-title">Chờ duyệt ${scope?'— Team '+esc(scope):'(toàn bộ)'} (${pending.length})</div>
+    <div class="section-title">Chờ duyệt ${scope?'— Team '+esc(scope.join(', ')):'(toàn bộ)'} (${pending.length})</div>
     ${pending.length? `
     <div class="toolbar">
       <button class="btn btn-outline btn-sm" data-action="selectAllPending">Chọn tất cả</button>
@@ -1514,7 +1722,17 @@ function employeeTeamOf(maNV){ const e=DB.employees.find(x=>x.maNV===maNV); retu
 /* Team mà 1 Leader thực sự quản lý (Team.leaderMaNV) — dùng để scope Duyệt/Dashboard theo WORKING TEAM của
    Work Record, KHÔNG phải theo Employee Team (Tổ chính) của người nhập. Nhân viên làm ở Tổ khác phải được
    Leader của Tổ đó duyệt, không phải Leader của Tổ mình. */
-function teamLedBy(maNV){ const t = DB.teams.find(x=>x.leaderMaNV===maNV); return t ? t.name : null; }
+function teamLedBy(maNV){ const t = teamsLedBy(maNV); return t.length ? t[0] : null; }
+/* 1 Tổ trưởng có thể quản lý NHIỀU Tổ — trả về TẤT CẢ Tổ có leaderMaNV = maNV (trước đây chỉ lấy Tổ đầu tiên). */
+function teamsLedBy(maNV){ return DB.teams.filter(x=> x.leaderMaNV!=='' && x.leaderMaNV!=null && String(x.leaderMaNV)===String(maNV)).map(t=>t.name); }
+/* Phạm vi Tổ của người dùng: null = Admin (tất cả Tổ); mảng tên Tổ = Tổ trưởng (mảng rỗng = chưa được gán Tổ nào). */
+function leaderScope(u){ return u.role==='Admin' ? null : teamsLedBy(u.maNV); }
+function inTeamScope(scope, teamName){ return !scope || scope.indexOf(teamName)!==-1; }
+/* Tổ đang xem ở tab Tổng hợp Tổ (chỉ xem được 1 Tổ mỗi lần): Admin chọn bất kỳ Tổ; Tổ trưởng chọn trong các Tổ mình quản lý. */
+function teamSummaryScope(u){
+  const options = u.role==='Admin' ? DB.teams.map(t=>t.name) : teamsLedBy(u.maNV);
+  return { options, scope: options.indexOf(window._tsTeam)!==-1 ? window._tsTeam : (options[0]||null) };
+}
 /* Nhân viên được chọn TỰ DO bất kỳ Tổ nào đang có trong hệ thống khi nhập liệu (đã bỏ cơ chế
    "Tổ khác cần Admin cấp quyền trước" trước đây). Tổ chính (Employee Team) vẫn giữ làm thông tin
    hồ sơ/báo cáo, không còn dùng để giới hạn Tổ được chọn khi nhập liệu. */
@@ -1529,11 +1747,9 @@ function teamDashPeriodRange(preset){
   const today = todayStr();
   if (preset==='today') return { from: today, to: today };
   if (preset==='week'){
-    const d = new Date(today+'T00:00:00');
-    const day = d.getDay(); // 0=Chu nhat
+    const day = new Date(today+'T00:00:00Z').getUTCDay(); // 0=Chu nhat — tinh theo UTC tren chuoi ngay VN, khong lech mui gio may
     const diffToMon = (day===0?6:day-1);
-    const mon = new Date(d); mon.setDate(d.getDate()-diffToMon);
-    return { from: mon.toISOString().slice(0,10), to: today };
+    return { from: addDaysStr(today, -diffToMon), to: today };
   }
   if (preset==='month') return { from: monthStartStr(), to: today };
   return null;
@@ -1544,16 +1760,14 @@ function teamDashPeriodRange(preset){
    đa 62 điểm để tránh biểu đồ quá dài khi Leader chọn khoảng thời gian rất rộng. */
 function getTeamProductivityTrendData(scope, fromStr, toStr){
   const labels = [], data = [], ref100 = [];
-  let d = new Date(fromStr+'T00:00:00');
-  const end = new Date(toStr+'T00:00:00');
+  let dateStr = fromStr;
   let guard = 0;
-  while (d<=end && guard<62){
-    const dateStr = d.toISOString().slice(0,10);
+  while (dateStr<=toStr && guard<62){
     labels.push(dateStr.slice(5));
-    const dayRows = DB.workRecords.filter(r=> (scope? r.workingTeam===scope : true) && r.date===dateStr && r.workType==='Direct' && r.status!=='Rejected');
+    const dayRows = DB.workRecords.filter(r=> inTeamScope(scope, r.workingTeam) && r.date===dateStr && r.workType==='Direct' && r.status!=='Rejected');
     data.push(dayRows.length ? productivityForRows(dayRows) : null);
     ref100.push(100);
-    d.setDate(d.getDate()+1);
+    dateStr = addDaysStr(dateStr, 1);
     guard++;
   }
   return { labels, data, ref100 };
@@ -1572,7 +1786,7 @@ function initTeamProductivityChart(retryCount){
   }
   if (teamProductivityChartInstance){ teamProductivityChartInstance.destroy(); teamProductivityChartInstance = null; }
   const u = currentUser();
-  const scope = u.role==='Admin' ? null : teamLedBy(u.maNV);
+  const scope = leaderScope(u);
   const from = window._tdFrom || monthStartStr(), to = window._tdTo || todayStr();
   const { labels, data, ref100 } = getTeamProductivityTrendData(scope, from, to);
   try {
@@ -1595,7 +1809,7 @@ function initTeamProductivityChart(retryCount){
 function viewTeamDash(){
   const u = currentUser();
   const isAdmin = u.role==='Admin';
-  const scope = isAdmin ? null : teamLedBy(u.maNV);
+  const scope = leaderScope(u);
   // Mac dinh xem tu DAU THANG hien tai den hom nay (khong phai chi 1 minh hom nay) — de vua vao Tab da co du
   // lieu ngay, khong bi hieu lam la "chua lam" chi vi hom nay chua nhap gi.
   window._tdPreset = window._tdPreset || 'month';
@@ -1604,7 +1818,7 @@ function viewTeamDash(){
   const today = todayStr();
 
   const rows = DB.workRecords.filter(r=>{
-    if (scope && r.workingTeam!==scope) return false;
+    if (!inTeamScope(scope, r.workingTeam)) return false;
     return r.date >= window._tdFrom && r.date <= window._tdTo;
   });
 
@@ -1622,8 +1836,8 @@ function viewTeamDash(){
   // "Nhân viên trong Tổ / Đã nộp / Chưa nộp". Riêng Data Entry & Missing Entry tính theo NGÀY HÔM NAY
   // (không theo khoảng bộ lọc), để Leader luôn biết ngay hôm nay ai đã/chưa nộp bất kể đang xem báo cáo
   // khoảng thời gian nào khác.
-  const teamRoster = DB.employees.filter(e=> e.role!=='Admin' && (scope? e.employeeTeam===scope : true));
-  const todayRows = DB.workRecords.filter(r=> (scope? r.workingTeam===scope : true) && r.date===today);
+  const teamRoster = DB.employees.filter(e=> e.role!=='Admin' && inTeamScope(scope, e.employeeTeam));
+  const todayRows = DB.workRecords.filter(r=> inTeamScope(scope, r.workingTeam) && r.date===today);
   const submittedMaNVToday = new Set(todayRows.map(r=>r.maNV));
   const missingEmployees = teamRoster.filter(e=> !submittedMaNVToday.has(e.maNV));
 
@@ -1641,11 +1855,11 @@ function viewTeamDash(){
 
   // Chờ duyệt — ALL-TIME theo đúng phạm vi Tổ (khớp viewApprove()), không giới hạn theo bộ lọc ngày ở trên,
   // vì đây là việc Leader cần xử lý ngay bất kể đang xem khoảng thời gian nào.
-  const pendingCount = DB.workRecords.filter(r=> r.status==='Pending' && (scope? r.workingTeam===scope : true)).length;
+  const pendingCount = DB.workRecords.filter(r=> r.status==='Pending' && inTeamScope(scope, r.workingTeam)).length;
 
   return renderShell(`
     <div class="section-title" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;">
-      <span>TỔ: ${esc(scope||'TẤT CẢ')} · ${esc(roleLabel(u.role).toUpperCase())}: ${esc(u.ten)}</span>
+      <span>TỔ: ${esc(scope ? (scope.join(', ')||'(chưa được gán)') : 'TẤT CẢ')} · ${esc(roleLabel(u.role).toUpperCase())}: ${esc(u.ten)}</span>
     </div>
     <div class="toolbar">
       <div class="btnlist" style="gap:6px;">
@@ -1713,14 +1927,14 @@ function viewTeamDash(){
 
     <div class="card">
       <div class="section-title">Chi tiết Work Record</div>
-      ${renderRecordTable(rows, {showToolbar:false, withPagination:true, withSearch:true, withTeamFilter:isAdmin, withEmployeeFilter:true, withProductFilter:true})}
+      ${renderRecordTable(rows, {showToolbar:false, withPagination:true, withSearch:true, withTeamFilter:isAdmin || (scope && scope.length>1), withEmployeeFilter:true, withProductFilter:true})}
     </div>
     <div class="card">
       <div class="section-title">Import Work Record (nhập liệu hàng loạt cho nhiều người)</div>
       <div class="hint">Định dạng cột <b>giống hệt file Xuất Excel</b> (22 cột) để dễ đối chiếu. Cột <b>bắt buộc điền</b>: Ngay (yyyy-mm-dd), MaNV, Loai (TrucTiep/GianTiep), ToLamViec, MaTP (Trực tiếp), MaNVL (chỉ khi có phân hoá NVL), CongDoan, SoLuong, TGBatDau (HH:MM), TGKetThuc (HH:MM), GhiChu (không bắt buộc). Các cột còn lại (Ten, ToChinh, TenTP, TenNVL, TGChuan, TGThaoTac, TGGiaiLao, TongTG, TGThaoTacChuan, NangSuat, TrangThai) <b>để trống</b> — hệ thống tự tính lại toàn bộ, không đọc giá trị anh điền vào các cột này.
         Với Gián tiếp: để trống MaTP, CongDoan = tên việc gián tiếp, SL để trống.
         Mỗi dòng được kiểm tra đầy đủ theo rule hiện hành (quyền Tổ, trùng giờ, Break, Thời gian chuẩn...) trước khi cho xem trước — dòng lỗi sẽ bị loại, chỉ import dòng hợp lệ. Sau import, trạng thái là <b>Chờ duyệt</b> như nhập tay bình thường.
-        ${scope? `Bạn chỉ được import cho Tổ <b>${esc(scope)}</b> (Tổ mình quản lý).` : ''}</div>
+        ${scope? `Bạn chỉ được import cho Tổ <b>${esc(scope.join(', '))}</b> (Tổ mình quản lý).` : ''}</div>
       <button class="btn btn-outline btn-sm" style="margin-top:8px;" data-action="downloadTemplate" data-val="workrecords">Tải file mẫu (.xlsx)</button>
       <input type="file" id="importFileWR" accept=".xlsx,.xls,.csv" style="margin-top:10px;">
       <button class="btn btn-primary" style="margin-top:10px;" data-action="parseWorkRecordImport">Xem trước dữ liệu</button>
@@ -1841,15 +2055,16 @@ function viewTeamSummary(){
   window._tsPreset = window._tsPreset || 'month';
   window._tsFrom = window._tsFrom || monthStartStr();
   window._tsTo = window._tsTo || todayStr();
-  const scope = isAdmin ? (window._tsTeam || (DB.teams[0] && DB.teams[0].name) || null) : teamLedBy(u.maNV);
+  const { options: tsOptions, scope } = teamSummaryScope(u);
 
   if (!scope){
     return renderShell(`<div class="card"><div class="empty">Bạn chưa được gán làm Tổ trưởng của Tổ nào.</div></div>`);
   }
 
-  const teamSelectHtml = isAdmin ? `
+  // Admin chọn bất kỳ Tổ; Tổ trưởng quản lý nhiều Tổ chọn trong các Tổ của mình.
+  const teamSelectHtml = (isAdmin || tsOptions.length>1) ? `
       <label style="margin:0;">Tổ:</label>
-      <select id="tsTeamSelect">${DB.teams.map(t=>`<option value="${esc(t.name)}" ${t.name===scope?'selected':''}>${esc(t.name)}</option>`).join('')}</select>` : '';
+      <select id="tsTeamSelect">${tsOptions.map(name=>`<option value="${esc(name)}" ${name===scope?'selected':''}>${esc(name)}</option>`).join('')}</select>` : '';
 
   const { rows, lentOut, giaiLaoTotalHour, totalQty, totalLaborHour, totalTheoreticalHour, overallProductivity, missingStdCount } =
     buildTeamSummaryRows(scope, window._tsFrom, window._tsTo);
@@ -2040,7 +2255,7 @@ function excelCellToHHMM(v){
 }
 function validateWorkRecordRows(rows){
   const u = currentUser();
-  const scope = u.role==='Admin' ? null : teamLedBy(u.maNV);
+  const scope = leaderScope(u);
   const batchByPerson = {};
   return rows.map((row)=>{
     const errors = [];
@@ -2052,7 +2267,7 @@ function validateWorkRecordRows(rows){
     const workingTeam = String(row.ToLamViec||'').trim();
     if (!DB.teams.some(t=>t.name===workingTeam)) errors.push('Tổ không tồn tại');
     if (emp && workingTeam && !getPermittedTeams(maNV).includes(workingTeam)) errors.push('Nhân viên không có quyền làm ở Tổ này');
-    if (scope && workingTeam && workingTeam!==scope) errors.push('Ngoài phạm vi Tổ bạn quản lý');
+    if (scope && workingTeam && scope.indexOf(workingTeam)===-1) errors.push('Ngoài phạm vi Tổ bạn quản lý');
     const loaiRaw = String(row.Loai||'').trim();
     const workType = loaiRaw==='GianTiep' ? 'Indirect' : (loaiRaw==='TrucTiep' ? 'Direct' : null);
     if (!workType) errors.push('Loai phải là TrucTiep hoặc GianTiep');
@@ -2116,10 +2331,15 @@ function parseWorkRecordImport(){
   if (typeof XLSX==='undefined'){ showToast('Không tải được thư viện Excel (cần internet cho lần đầu).', true); return; }
   const file = input.files[0];
   const reader = new FileReader();
-  reader.onload = (e)=>{
+  reader.onload = async (e)=>{
     const wb = XLSX.read(e.target.result, {type:'binary'});
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rawRows = XLSX.utils.sheet_to_json(ws, {defval:''});
+    // Client chi giu Work Record cua cac thang da xem — tai truoc cac thang co trong file de kiem tra trung
+    // gio / phat hien dong trung khoa (ghi de) cho dung. Server van kiem tra trung gio lai lan nua khi ghi.
+    const months = [...new Set(rawRows.map(row=>String(excelCellToDateStr(row.Ngay)||'').slice(0,7)))];
+    const loaded = await ensureRecordMonthsLoaded(months);
+    if (!loaded) showToast('⚠️ Không tải được dữ liệu cũ để đối chiếu — Server vẫn tự kiểm tra trùng giờ khi ghi.', true);
     const validated = validateWorkRecordRows(rawRows);
     showWorkRecordPreviewModal(validated);
   };
@@ -2189,7 +2409,7 @@ async function commitWorkRecordImport(){
     };
     itemsToSend.push(v.overwriteId ? Object.assign({overwriteId:v.overwriteId}, fields) : Object.assign({id: uid()}, fields));
   });
-  const apiResult = await apiCallOrQueue('bulkImportWorkRecords', { session: currentSession, records: itemsToSend });
+  const apiResult = await apiWrite('bulkImportWorkRecords', { session: currentSession, records: itemsToSend });
   if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Work Record thất bại.', true); return; }
   itemsToSend.forEach(item=>{
     if (item.overwriteId){
@@ -2205,10 +2425,18 @@ async function commitWorkRecordImport(){
       createdCount++;
     }
   });
+  if (API_URL && apiResult && apiResult.ok){
+    // Server tu tinh lai TG chuan/thoi gian cho tung dong — tai lai dung cac ngay vua import de hien so lieu chuan cua Server.
+    const dates = itemsToSend.map(i=>i.date).filter(Boolean).sort();
+    if (dates.length) await fetchRecordRange(dates[0], dates[dates.length-1], false);
+    createdCount = apiResult.created||0; updatedCount = apiResult.updated||0;
+  }
   saveDB(); closeModal();
   let msg = `Đã import: ${createdCount} mới${updatedCount?`, ${updatedCount} cập nhật (ghi đè)`:''}.`;
   if (needsTGCCount) msg += ` ⚠️ ${needsTGCCount} dòng chưa có Thời gian chuẩn (tạm =0) — sẽ tự cập nhật khi Admin bổ sung định mức.`;
-  showToast(msg);
+  const skipped = apiResult ? (apiResult.blocked||0) + (apiResult.skippedOverlap||0) + (apiResult.invalid||0) : 0;
+  if (skipped) msg += ` ⚠️ Máy chủ bỏ qua ${skipped} dòng (ngoài phạm vi Tổ / trùng giờ / dữ liệu không hợp lệ).`;
+  showToast(msg, skipped>0);
   window._wrImportValidated=null; render();
 }
 
@@ -2245,7 +2473,7 @@ function manualAdd(type){
     (async()=>{
       const newEmp = {maNV, ten:val('addEmpTen'), employeeTeam:homeTeam, role:document.getElementById('addEmpRole').value,
         active:document.getElementById('addEmpTrangthai').value==='Active', passwordHash: await sha256(pw)};
-      const apiResult = await apiCallOrQueue('addEmployee', { session: currentSession, employee: newEmp });
+      const apiResult = await apiWrite('addEmployee', { session: currentSession, employee: newEmp });
       if (apiResult){
         if (!apiResult.ok){ showToast(apiResult.error||'Thêm nhân viên thất bại.', true); return; }
         DB.employees = apiResult.employees; saveDB(); showToast('Đã thêm nhân viên (đồng bộ dùng chung).'); render(); return;
@@ -2261,7 +2489,7 @@ function manualAdd(type){
     if (DB.teams.some(t=>t.name===name)){ showToast('Tên Tổ đã tồn tại.', true); return; }
     const newTeam = {name, leaderMaNV: val('addTeamLeaderto')};
     (async()=>{
-      const apiResult = await apiCallOrQueue('addTeam', { session: currentSession, team: newTeam });
+      const apiResult = await apiWrite('addTeam', { session: currentSession, team: newTeam });
       if (apiResult){
         if (!apiResult.ok){ showToast(apiResult.error||'Thêm Tổ thất bại.', true); return; }
         DB.teams = apiResult.teams; saveDB(); showToast('Đã thêm Team (đồng bộ dùng chung).'); render(); return;
@@ -2286,15 +2514,17 @@ function manualAdd(type){
     if (dup){ showToast('Dòng này đã tồn tại (trùng khoá Loại+Tổ+Mã TP+Mã NVL+Công đoạn).', true); return; }
     const newItem = {workType:loai, workingTeam:to, maTP, tenTP, maNVL, tenNVL, congDoan, thoiGianChuan:tg};
     (async()=>{
-      const apiResult = await apiCallOrQueue('addCatalog', { session: currentSession, item: newItem });
+      const apiResult = await apiWrite('addCatalog', { session: currentSession, item: newItem });
       if (apiResult){
         if (!apiResult.ok){ showToast(apiResult.error||'Thêm thất bại.', true); return; }
-        DB.workCatalog = apiResult.catalog;
-        const filled = autoFillPendingStandardTimes();
+        DB.workCatalog = apiResult.catalog; DB.workCatalogVersion = null;
+        // Server tu dien TG chuan cho cac Work Record dang thieu va GHI LEN SHEET — tai lai de thay so lieu moi.
+        const filled = apiResult.filledStandardTimes || 0;
+        if (filled) await syncEmployeesAndTeamsFromAPI(currentSession);
         saveDB(); showToast('Đã thêm (đồng bộ dùng chung).' + (filled? ` Đã tự động cập nhật TG chuẩn cho ${filled} Work Record đang chờ.` : '')); render();
         return;
       }
-      DB.workCatalog.push(newItem); // fallback cuc bo neu chua co API dung chung
+      DB.workCatalog.push(newItem); DB.workCatalogVersion = null; // fallback cuc bo neu chua co API dung chung
       const filled = autoFillPendingStandardTimes();
       saveDB(); showToast('Đã thêm.' + (filled? ` Đã tự động cập nhật TG chuẩn cho ${filled} Work Record đang chờ.` : '')); render();
     })();
@@ -2308,7 +2538,7 @@ function manualAdd(type){
     if (!workingTeam || !maTP){ showToast('Nhập đủ Tổ và Mã TP.', true); return; }
     const newItem = {workingTeam, maTP, tenTP, standardTimeTotal: tg};
     (async()=>{
-      const apiResult = await apiCallOrQueue('addProductStdTime', { session: currentSession, item: newItem });
+      const apiResult = await apiWrite('addProductStdTime', { session: currentSession, item: newItem });
       if (apiResult){
         if (!apiResult.ok){ showToast(apiResult.error||'Thêm thất bại.', true); return; }
         DB.productStandardTimes = apiResult.productStdTimes; saveDB(); showToast('Đã thêm (đồng bộ dùng chung).'); render();
@@ -2360,7 +2590,7 @@ function editEmployee(maNV){
     const newPw = document.getElementById('editEmpPw').value.trim();
     const changes = { ten: document.getElementById('editEmpTen').value.trim(), employeeTeam: homeTeam, role: newRole, active: newActive };
     if (newPw) changes.passwordHash = await sha256(newPw);
-    const apiResult = await apiCallOrQueue('editEmployee', { session: currentSession, maNV, changes });
+    const apiResult = await apiWrite('editEmployee', { session: currentSession, maNV, changes });
     if (apiResult){
       if (!apiResult.ok){ showToast(apiResult.error||'Sửa thất bại.', true); return; }
       DB.employees = apiResult.employees; saveDB(); closeModal(); showToast('Đã lưu thay đổi (đồng bộ dùng chung).'); render();
@@ -2387,7 +2617,7 @@ function deleteEmployee(maNV){
     </div>`);
   document.getElementById('confirmDeleteEmp').addEventListener('click', async ()=>{
     if (document.getElementById('deleteEmpConfirmText').value.trim()!=='XOA'){ showToast('Chưa gõ đúng "XOA".', true); return; }
-    const apiResult = await apiCallOrQueue('deleteEmployee', { session: currentSession, maNV });
+    const apiResult = await apiWrite('deleteEmployee', { session: currentSession, maNV });
     if (apiResult){
       if (!apiResult.ok){ showToast(apiResult.error||'Xoá thất bại.', true); return; }
       DB.employees = apiResult.employees;
@@ -2429,7 +2659,7 @@ function editTeam(oldName){
     const newLeader = document.getElementById('editTeamLeaderto').value.trim();
     if (!newName){ showToast('Tên Tổ không được để trống.', true); return; }
     if (newName!==oldName && DB.teams.some(x=>x.name!==oldName && x.name===newName)){ showToast('Tên Tổ mới đã tồn tại.', true); return; }
-    const apiResult = await apiCallOrQueue('editTeam', { session: currentSession, oldName, changes: { name:newName, leaderMaNV:newLeader } });
+    const apiResult = await apiWrite('editTeam', { session: currentSession, oldName, changes: { name:newName, leaderMaNV:newLeader } });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Sửa Tổ thất bại.', true); return; }
     if (apiResult && apiResult.ok) DB.teams = apiResult.teams;
     else { t.name = newName; t.leaderMaNV = newLeader; } // fallback cuc bo neu chua co API dung chung
@@ -2643,7 +2873,8 @@ function viewAdminRecords(){
 /* Xoá sạch toàn bộ Work Record (kể cả Audit Log liên quan) — dùng cho việc test lại từ đầu.
    Xác nhận kép theo đúng chuẩn UI-071: phải gõ đúng "XÁC NHẬN" mới xoá được. */
 function confirmClearAllRecords(){
-  const count = DB.workRecords.length;
+  const s = serverAdminSummary(); // Client chi giu thang dang xem — lay TONG SO THAT tren Server de canh bao dung
+  const count = s ? s.totalRecords : DB.workRecords.length;
   openModal(`
     <h3>Xoá sạch dữ liệu Work Record</h3>
     <div class="banner" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">⚠️ Sẽ xoá vĩnh viễn toàn bộ <b>${count} Work Record</b> hiện có (mọi trạng thái) và Audit Log liên quan. Không thể hoàn tác. Sản phẩm/TGC, Nhân viên, Tổ... KHÔNG bị ảnh hưởng.</div>
@@ -2658,12 +2889,13 @@ function confirmClearAllRecords(){
   btn.addEventListener('click', async ()=>{
     if (input.value.trim()!=='XÁC NHẬN') return;
     if (currentUser().role!=='Admin'){ showToast('Chỉ Admin được xoá sạch Work Record.', true); closeModal(); return; }
-    const apiResult = await apiCallOrQueue('clearAllWorkRecords', { session: currentSession });
+    const apiResult = await apiWrite('clearAllWorkRecords', { session: currentSession });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Xoá sạch thất bại.', true); return; }
     const ids = new Set(DB.workRecords.map(r=>r.id));
     DB.workRecords = [];
     DB.auditLogs = DB.auditLogs.filter(a=>!ids.has(a.recordId));
-    saveDB(); closeModal(); showToast(`Đã xoá sạch ${ids.size} Work Record.`); render();
+    DB.adminSummary = null; adminSummaryFetchedAt = 0;
+    saveDB(); closeModal(); showToast(`Đã xoá sạch toàn bộ Work Record.`); render();
   });
 }
 
@@ -2750,7 +2982,7 @@ function deleteProductStdTime(key){
     </div>`);
   document.getElementById('confirmDeleteStd').addEventListener('click', async ()=>{
     if (document.getElementById('deleteStdConfirmText').value.trim()!=='XOA'){ showToast('Chưa gõ đúng "XOA".', true); return; }
-    const apiResult = await apiCallOrQueue('deleteProductStdTime', { session: currentSession, workingTeam, maTP });
+    const apiResult = await apiWrite('deleteProductStdTime', { session: currentSession, workingTeam, maTP });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Xoá thất bại.', true); return; }
     DB.productStandardTimes = DB.productStandardTimes.filter(p=>!(p.workingTeam===workingTeam && p.maTP===maTP));
     saveDB(); closeModal(); showToast('Đã xoá.'); render();
@@ -2822,6 +3054,7 @@ function render(){
   touchSession();
   const u = currentUser();
   if (!isRouteAllowed(route, u.role)){ route='dashboard'; showToast('Bạn không có quyền truy cập mục này.', true); }
+  maybeLoadRecordsForView(); // tai ngam thang/khoang ngay man hinh nay can (neu chua co), xong tu render() lai
   let html;
   switch(route){
     case 'entry': html = viewEntry(); break;
@@ -2864,27 +3097,18 @@ function attachLoginEvents(){
         return;
       }
       // Thu dang nhap qua API dung chung (Google Sheets) truoc — neu API_URL chua cau hinh hoac loi mang/timeout, apiCall tra ve null.
-      const apiResult = await apiCall('login', { maNV, passwordHash: hash });
+      // includeData:true — Server tra luon du lieu khoi dong (Nhan vien/To/Danh muc/TG chuan SP/Work Record thang
+      // nay) trong CUNG response dang nhap: chi 1 request thay vi 6 (giam tai rat nhieu luc dau ca khi ca xuong
+      // cung dang nhap).
+      const apiResult = await apiCall('login', { maNV, passwordHash: hash, includeData: true, fromDate: recordsBootstrapFromDate(), catalogVersion: knownCatalogVersion() });
       if (apiResult){
         if (!apiResult.ok){ errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${esc(apiResult.error||'Đăng nhập thất bại.')}</div>`; return; }
-        // Neu tai khoan nay DA co san du lieu cuc bo tren may nay (vd tung dang nhap truoc do, hoac vua co
-        // nguoi khac dang nhap va DB.employees con dang chua ban ghi nay) -> vao thang Dashboard NGAY, khong
-        // bat nguoi dung nhin man hinh "dung hinh" cho het 5 request dong bo (Nhan vien/To/Danh muc/Cong viec/
-        // TG chuan) moi xong. Dong bo van chay NGAM sau do va tu ve lai khi xong (neu van con dang o phien nay).
-        // Chi nhung tai khoan CHUA TUNG dang nhap tren may nay (khong co du lieu cuc bo) moi phai cho dong bo
-        // xong truoc, vi neu khong currentUser() se khong tim thay va bi day nguoc ve man hinh dang nhap.
-        const knownLocally = DB.employees.some(e=>e.maNV===maNV);
         login(maNV, remember, hash);
-        if (knownLocally){
-          route = 'dashboard'; render();
-          syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash }).then(()=>{
-            // Chi ve lai neu nguoi dung van dang o dung phien nay luc dong bo xong (chua logout/doi tai khoan khac trong luc cho).
-            if (currentSession && currentSession.maNV===maNV) render();
-          }).catch(()=>{});
-        } else {
-          await syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash });
-          route = 'dashboard'; render();
-        }
+        if (apiResult.data) applyBootstrapData(apiResult.data);
+        else await syncEmployeesAndTeamsFromAPI({ maNV, passwordHash: hash }); // Server ban cu chua ho tro includeData
+        if (!currentSession || currentSession.maNV!==maNV) return; // da doi tai khoan khac trong luc cho
+        if (!DB.employees.some(e=>e.maNV===maNV) && apiResult.employee) DB.employees.push(apiResult.employee);
+        route = 'dashboard'; render();
         return;
       }
       // apiCall() tra ve null: HOẶC chua cau hinh API_URL (luon nhu vay, dung che do cuc bo binh thuong — KHONG
@@ -2895,7 +3119,13 @@ function attachLoginEvents(){
       const onlineFailReason = lastApiTimedOut
         ? 'Không nhận được phản hồi từ máy chủ trong '+Math.round(API_TIMEOUT_MS/1000)+'s (timeout).'
         : 'Không kết nối được tới máy chủ (mất mạng, hoặc máy chủ đang lỗi).';
-      // Fallback: che do cuc bo — dung 1 THONG DIEP CHUNG cho "khong ton tai"/"sai mat khau"/"bi khoa", tranh lo
+      // BR-292 (KHONG offline): da cau hinh may chu dung chung thi BAT BUOC dang nhap qua may chu — khong con
+      // dang nhap bang du lieu cuc bo (du lieu cu tren may, co the lech voi Sheet).
+      if (API_URL){
+        errBox.innerHTML = `<div class="err" style="margin-bottom:10px;">${esc(onlineFailReason)} Cần có kết nối mạng để đăng nhập — kiểm tra kết nối rồi thử lại.</div>`;
+        return;
+      }
+      // Che do cuc bo hoan toan (khong cau hinh API_URL) — dung 1 THONG DIEP CHUNG cho "khong ton tai"/"sai mat khau"/"bi khoa", tranh lo
       // thong tin ke tan cong co the dung de do MNV nao ton tai (loi enumeration cu da duoc audit va sua o day).
       const GENERIC_LOGIN_FAIL = 'Mã nhân viên hoặc mật khẩu không chính xác.';
       const emp = DB.employees.find(e=>e.maNV===maNV);
@@ -2920,7 +3150,10 @@ function attachLoginEvents(){
   const resetLink = document.getElementById('resetToDefault');
   if (resetLink) resetLink.addEventListener('click', (ev)=>{
     ev.preventDefault();
-    if (!confirm('Xoá toàn bộ dữ liệu hiện tại trên trình duyệt này và đặt lại về mặc định (chỉ còn tài khoản Admin/Admin)? Không thể hoàn tác — nếu cần giữ lại, hãy Xuất Backup trước.')) return;
+    const resetMsg = API_URL
+      ? 'Xoá dữ liệu tạm lưu trên trình duyệt này? Dữ liệu dùng chung trên máy chủ KHÔNG bị ảnh hưởng — lần đăng nhập sau sẽ tải lại từ máy chủ.'
+      : 'Xoá toàn bộ dữ liệu hiện tại trên trình duyệt này và đặt lại về mặc định? Không thể hoàn tác — nếu cần giữ lại, hãy Xuất Backup trước.';
+    if (!confirm(resetMsg)) return;
     localStorage.removeItem(CONDOR_DB_KEY);
     localStorage.removeItem(CONDOR_SESSION_KEY);
     sessionStorage.removeItem(CONDOR_SESSION_KEY);
@@ -3044,8 +3277,8 @@ async function handleAction(action, val, id){
     case 'downloadTemplate': downloadTemplate(val); return;
     case 'manualAdd': manualAdd(val); return;
     case 'selectAllPending':{
-      const u=currentUser(); const scope = u.role==='Admin'?null:teamLedBy(u.maNV);
-      DB.workRecords.filter(r=>r.status==='Pending'&&(scope?r.workingTeam===scope:true)).forEach(r=>approveSelection.add(r.id));
+      const u=currentUser(); const scope = leaderScope(u);
+      DB.workRecords.filter(r=>r.status==='Pending'&&inTeamScope(scope, r.workingTeam)).forEach(r=>approveSelection.add(r.id));
       render(); return;
     }
     case 'bulkApprove': await bulkApprove(); return;
@@ -3069,7 +3302,8 @@ async function handleAction(action, val, id){
       render(); return;
     }
     case 'deleteProductStdTime': deleteProductStdTime(id); return;
-    case 'exportAllRecords': exportRecords(DB.workRecords); return;
+    // Client chi giu cac thang da xem: xuat dung thang dang loc (bo trong o Thang = da tai toan bo -> xuat toan bo)
+    case 'exportAllRecords': exportRecords(recordMonthFilter ? DB.workRecords.filter(r=>String(r.date).startsWith(recordMonthFilter)) : DB.workRecords); return;
     case 'deleteRecord': confirmDeleteRecord(id); return;
     case 'confirmClearAllRecords': confirmClearAllRecords(); return;
     case 'viewAudit': await showAuditModal(id); return;
@@ -3085,14 +3319,15 @@ async function handleAction(action, val, id){
 }
 
 function currentTeamDashRows(){
-  const u=currentUser(); const isAdmin=u.role==='Admin'; const scope = isAdmin?null:teamLedBy(u.maNV);
+  const u=currentUser(); const isAdmin=u.role==='Admin'; const scope = leaderScope(u);
   const from = window._tdFrom||todayStr(), to = window._tdTo||todayStr();
-  return DB.workRecords.filter(r=> (scope?r.workingTeam===scope:true) && r.date>=from && r.date<=to);
+  return DB.workRecords.filter(r=> inTeamScope(scope, r.workingTeam) && r.date>=from && r.date<=to);
 }
 
 /* ---------------- Entry submit logic ---------------- */
 async function submitEntry(){
   const s = entryState;
+  if (s.submitting) return; // chong bam "Lưu" 2 lan trong luc dang cho Server
   const u = currentUser();
   s.errors = {};
   const isEdit = !!s.editingId;
@@ -3131,7 +3366,9 @@ async function submitEntry(){
   if (times.insideBreak){ s.errors.time = 'Khoảng thời gian nằm hoàn toàn trong giờ Break — không được lưu.'; render(); return; }
   if (times.actualTime<=0){ s.errors.time = 'Actual Time bằng 0 — không được lưu.'; render(); return; }
   if (times.totalTime > 960){ s.errors.time = `Tổng thời gian ${Math.round(times.totalTime/60*10)/10} giờ — quá dài cho 1 ca, có thể anh chọn nhầm Giờ bắt đầu/Kết thúc. Kiểm tra lại.`; render(); return; }
-  const overlap = overlapsExisting(u.maNV, s.date, startMin, endMin, s.editingId);
+  // Kiem tra trung gio theo CHU BAN GHI (khi Leader/Admin sua ho thi khong phai nguoi dang dang nhap).
+  const ownerMaNV = isEdit ? existing.maNV : u.maNV;
+  const overlap = overlapsExisting(ownerMaNV, s.date, startMin, endMin, s.editingId);
   if (overlap){ s.errors.time = `Trùng giờ với Work Record ${minToHHMM(overlap.start)}–${minToHHMM(overlap.end)} đã có.`; render(); return; }
 
   let thoiGianChuan = 0, tenTP = '', tenNVL = '';
@@ -3146,7 +3383,9 @@ async function submitEntry(){
 
   // Tao moi: chup nhanhTo chinh (employeeTeam) cua nguoi nop tai thoi diem nop — khong tu doi sau nay du sau co doi To chinh.
   const rec = isEdit ? existing : {
-    id: uid(), maNV:u.maNV, ten:u.ten, employeeTeam:u.employeeTeam||'',
+    // Giu nguyen 1 Id cho moi lan bam Luu lai cua CUNG 1 form: neu lan truoc thuc ra da luu (mat mang/timeout
+    // luc cho phan hoi), Server bao trung Id thay vi tao them 1 ban ghi (hoac bao trung gio gay kho hieu).
+    id: s.draftId || (s.draftId = uid()), maNV:u.maNV, ten:u.ten, employeeTeam:u.employeeTeam||'',
     createdAt: Date.now(), status:'Pending',
   };
   const before = isEdit ? JSON.stringify(rec) : null;
@@ -3160,26 +3399,43 @@ async function submitEntry(){
     start:startMin, end:endMin, totalTime:times.totalTime, breakTime:times.breakTime, actualTime:times.actualTime, otMinutes:times.otMinutes,
     note: s.note||'', needsStandardTime:false,
   });
-  if (isEdit){
-    rec.status='Pending'; rec.rejectReason=null;
-    addAudit(rec.id, u.maNV, 'Sửa lại Work Record', before, JSON.stringify(rec));
-    const apiResult = await apiCallOrQueue('editWorkRecord', { session: currentSession, id: rec.id, changes: rec });
-    if (apiResult && !apiResult.ok){
-      Object.assign(rec, JSON.parse(before)); // rollback cuc bo neu Server tu choi that su (vd trung gio voi ban ghi tu thiet bi khac) — tranh Client hien thi sai lech voi Server
-      showToast(apiResult.error||'Sửa Work Record thất bại.', true);
-      entryState = freshEntryState(); render(); return;
+  // Trong luc cho Server: khoa nut Lưu + bao "dang xep hang" neu Server ban (busy). Neu that bai, GIU NGUYEN
+  // du lieu da nhap tren form (khong reset) de nguoi dung chi can bam Lưu lai — truoc day form bi xoa trang.
+  s.submitting = true;
+  render();
+  apiBusyListener = (attempt, max)=> showToast(`Máy chủ đang bận — đang xếp hàng gửi lại (lần ${attempt}/${max}). Vui lòng không tắt trang...`);
+  let apiResult;
+  try {
+    if (isEdit){
+      rec.status='Pending'; rec.rejectReason=null;
+      apiResult = await apiWrite('editWorkRecord', { session: currentSession, id: rec.id, changes: rec });
+      if (apiResult && apiResult.ok && apiResult.record) Object.assign(rec, apiResult.record); // Server tinh lai & tra ban ghi chuan — dung ban cua Server
+      if (apiResult && !apiResult.ok) Object.assign(rec, JSON.parse(before)); // rollback cuc bo neu Server tu choi that su (vd trung gio voi ban ghi tu thiet bi khac) — tranh Client hien thi sai lech voi Server
+      else addAudit(rec.id, u.maNV, 'Sửa lại Work Record', before, JSON.stringify(rec));
+    } else {
+      DB.workRecords.push(rec);
+      apiResult = await apiWrite('addWorkRecord', { session: currentSession, record: rec });
+      // Lan bam truoc da luu thanh cong (chi la khong nhan duoc phan hoi) -> coi nhu thanh cong, khong tao trung.
+      // Server tra lai dung ban ghi DA LUU o lan truoc (neu lan nay nguoi dung co sua gi tren form thi ban da luu van la gia tri lan truoc — hien dung gia tri do, bao ro).
+      if (apiResult && !apiResult.ok && apiResult.duplicateId) apiResult = { ok:true, record: apiResult.record, fromEarlierAttempt:true };
+      if (apiResult && apiResult.ok && apiResult.record) Object.assign(rec, apiResult.record); // Server tinh lai & tra ban ghi chuan
+      if (apiResult && !apiResult.ok) DB.workRecords = DB.workRecords.filter(x=>x.id!==rec.id); // rollback cuc bo neu Server tu choi that su (khong phai do mat mang)
     }
-  } else {
-    DB.workRecords.push(rec);
-    const apiResult = await apiCallOrQueue('addWorkRecord', { session: currentSession, record: rec });
-    if (apiResult && !apiResult.ok){
-      DB.workRecords = DB.workRecords.filter(x=>x.id!==rec.id); // rollback cuc bo neu Server tu choi that su (khong phai do mat mang)
-      showToast(apiResult.error||'Nộp Work Record thất bại.', true);
-      entryState = freshEntryState(); render(); return;
+  } finally {
+    apiBusyListener = null;
+    s.submitting = false;
+  }
+  if (apiResult && !apiResult.ok){
+    if (entryState===s){
+      s.errors.submit = apiResult.busy
+        ? 'Máy chủ đang quá tải nên chưa lưu được. Dữ liệu vẫn giữ nguyên trên form — bấm "Lưu dữ liệu" lại sau ít giây.'
+        : (apiResult.error || (isEdit ? 'Sửa Work Record thất bại.' : 'Nộp Work Record thất bại.'));
     }
+    showToast(apiResult.busy ? 'Máy chủ đang quá tải — chưa lưu, dữ liệu vẫn còn trên form.' : (apiResult.error||'Lưu thất bại.'), true);
+    render(); return;
   }
   saveDB();
-  showToast('Đã lưu thành công.');
+  showToast(apiResult && apiResult.fromEarlierAttempt ? 'Bản ghi đã được lưu từ lần bấm trước — kiểm tra lại trong Lịch sử, sửa nếu cần.' : 'Đã lưu thành công.');
   entryState = freshEntryState();
   render();
 }
@@ -3197,7 +3453,7 @@ function loadRecordForEdit(id){
 function canActOnRecord(r, u){
   if (!r) return false;
   if (u.role==='Admin') return true;
-  if (u.role==='Leader') return teamLedBy(u.maNV)===r.workingTeam;
+  if (u.role==='Leader') return teamsLedBy(u.maNV).indexOf(r.workingTeam)!==-1;
   return false;
 }
 /* Sua: chu ban ghi (bat ky Role) HOAC Leader cua dung To lam viec HOAC Admin — deu duoc sua.
@@ -3211,7 +3467,7 @@ async function approveRecord(id){
   const r = DB.workRecords.find(x=>x.id===id);
   const u = currentUser();
   if (!canActOnRecord(r, u)){ showToast('Bạn không có quyền duyệt bản ghi này.', true); return; }
-  const apiResult = await apiCallOrQueue('approveWorkRecord', { session: currentSession, id });
+  const apiResult = await apiWrite('approveWorkRecord', { session: currentSession, id });
   if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Duyệt thất bại.', true); return; }
   const before = JSON.stringify(r);
   r.status='Approved'; r.approvedBy=u.maNV; r.approvedAt=Date.now(); r.rejectReason=null;
@@ -3229,7 +3485,7 @@ async function bulkApprove(){
     validRecords.push(r);
   });
   if (validRecords.length){
-    const apiResult = await apiCallOrQueue('approveWorkRecord', { session: currentSession, ids: validRecords.map(r=>r.id) });
+    const apiResult = await apiWrite('approveWorkRecord', { session: currentSession, ids: validRecords.map(r=>r.id) });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Duyệt hàng loạt thất bại.', true); return; }
   }
   validRecords.forEach(r=>{
@@ -3256,7 +3512,7 @@ function openRejectModal(id){
     const r = DB.workRecords.find(x=>x.id===id);
     const u = currentUser();
     if (!canActOnRecord(r, u)){ showToast('Bạn không có quyền từ chối bản ghi này.', true); closeModal(); return; }
-    const apiResult = await apiCallOrQueue('rejectWorkRecord', { session: currentSession, id, reason });
+    const apiResult = await apiWrite('rejectWorkRecord', { session: currentSession, id, reason });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Từ chối thất bại.', true); return; }
     const before = JSON.stringify(r);
     r.status='Rejected'; r.rejectReason=reason; r.rejectedBy=u.maNV; r.rejectedAt=Date.now();
@@ -3335,10 +3591,14 @@ async function commitImport(){
       };
     });
     const newCatalog = Object.values(seen);
-    const apiResult = await apiCallOrQueue('replaceCatalog', { session: currentSession, catalog: newCatalog });
+    const apiResult = await apiWrite('replaceCatalog', { session: currentSession, catalog: newCatalog });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Danh mục thất bại.', true); return; }
-    DB.workCatalog = (apiResult && apiResult.ok) ? apiResult.catalog : newCatalog; // fallback cuc bo neu chua co API dung chung
-    autoFilledCount = autoFillPendingStandardTimes();
+    DB.workCatalog = (apiResult && apiResult.ok) ? apiResult.catalog : newCatalog; DB.workCatalogVersion = null; // fallback cuc bo neu chua co API dung chung
+    if (apiResult && apiResult.ok){
+      // Server tu dien TG chuan cho cac Work Record dang thieu va GHI LEN SHEET (truoc day chi sua tren may Admin, lan dong bo sau la mat).
+      autoFilledCount = apiResult.filledStandardTimes || 0;
+      if (autoFilledCount) await syncEmployeesAndTeamsFromAPI(currentSession);
+    } else autoFilledCount = autoFillPendingStandardTimes(); // che do cuc bo hoan toan
   } else if (type==='employees'){
     const hasAdmin = rows.some(row => String(row.Role||'').trim()==='Admin');
     if (!hasAdmin){
@@ -3354,14 +3614,14 @@ async function commitImport(){
         active:(row.Trangthai||'Active')!=='Inactive', passwordHash: existing[maNV] || null});
     }
     for (const e of newEmployees){ if (!e.passwordHash) e.passwordHash = await sha256(e.maNV); }
-    const apiResult = await apiCallOrQueue('replaceEmployees', { session: currentSession, employees: newEmployees });
+    const apiResult = await apiWrite('replaceEmployees', { session: currentSession, employees: newEmployees });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Nhân viên thất bại.', true); return; }
     DB.employees = (apiResult && apiResult.ok) ? apiResult.employees : newEmployees; // fallback cuc bo neu chua co API dung chung
   } else if (type==='teams'){
     const seen = {};
     rows.forEach(row=>{ const name=String(row.Tento||'').trim(); if(name) seen[name]={name, leaderMaNV:String(row.Leaderto||'').trim()}; });
     const newTeams = Object.values(seen);
-    const apiResult = await apiCallOrQueue('replaceTeams', { session: currentSession, teams: newTeams });
+    const apiResult = await apiWrite('replaceTeams', { session: currentSession, teams: newTeams });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import Tổ thất bại.', true); return; }
     DB.teams = (apiResult && apiResult.ok) ? apiResult.teams : newTeams; // fallback cuc bo neu chua co API dung chung
   } else if (type==='productstdtime'){
@@ -3381,7 +3641,7 @@ async function commitImport(){
         flat.push({ workingTeam: teamName, maTP, tenTP, standardTimeTotal: num });
       });
     });
-    const apiResult = await apiCallOrQueue('replaceProductStdTimes', { session: currentSession, productStdTimes: flat });
+    const apiResult = await apiWrite('replaceProductStdTimes', { session: currentSession, productStdTimes: flat });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Import TG chuẩn SP thất bại.', true); return; }
     DB.productStandardTimes = (apiResult && apiResult.ok) ? apiResult.productStdTimes : flat; // fallback cuc bo neu chua co API dung chung
   }
@@ -3405,7 +3665,7 @@ function confirmDeleteRecord(id){
     if (document.getElementById('deleteConfirmText').value.trim()!=='XOA'){ showToast('Chưa gõ đúng "XOA".', true); return; }
     const u = currentUser();
     if (u.role!=='Admin'){ showToast('Chỉ Admin được xoá Work Record.', true); closeModal(); return; }
-    const apiResult = await apiCallOrQueue('deleteWorkRecord', { session: currentSession, id });
+    const apiResult = await apiWrite('deleteWorkRecord', { session: currentSession, id });
     if (apiResult && !apiResult.ok){ showToast(apiResult.error||'Xoá thất bại.', true); return; }
     addAudit(id, u.maNV, 'Admin xóa Work Record', JSON.stringify(r), null);
     DB.workRecords = DB.workRecords.filter(x=>x.id!==id);
@@ -3418,6 +3678,7 @@ function confirmDeleteRecord(id){
 async function showAuditModal(id){
   openModal(`<h3>Audit Log</h3><div class="empty">Đang tải...</div>`);
   const apiResult = await apiCall('listAuditLogs', { session: currentSession, recordId: id });
+  if (apiResult && !apiResult.ok){ openModal(`<h3>Audit Log</h3><div class="err">${esc(apiResult.error||'Không tải được nhật ký.')}</div><div class="modal-actions"><button class="btn btn-outline" data-action="closeModal">Đóng</button></div>`); return; }
   const logs = (apiResult && apiResult.ok) ? apiResult.auditLogs
     : DB.auditLogs.filter(l=>l.recordId===id).sort((a,b)=>b.changedAt-a.changedAt);
   const offlineNote = (apiResult && apiResult.ok) ? '' : '<div class="hint">⚠️ Không kết nối được Server — chỉ hiển thị log cục bộ trên máy này.</div>';
@@ -3449,7 +3710,7 @@ function openResetPasswordModal(maNV){
     if (!confirm(`Xác nhận đặt lại mật khẩu cho Nhân viên ${maNV}?`)) return;
     const val = pw1.trim() || maNV;
     const newHash = await sha256(val);
-    const apiResult = await apiCallOrQueue('editEmployee', { session: currentSession, maNV, changes: { passwordHash: newHash } });
+    const apiResult = await apiWrite('editEmployee', { session: currentSession, maNV, changes: { passwordHash: newHash } });
     if (apiResult){
       if (!apiResult.ok){ showToast(apiResult.error||'Đặt lại mật khẩu thất bại.', true); return; }
       DB.employees = apiResult.employees; saveDB(); closeModal(); showToast('Đã đặt lại mật khẩu (đồng bộ dùng chung).'); return;
@@ -3485,7 +3746,7 @@ function exportRecords(rows){
 function exportTeamSummary(){
   const u = currentUser();
   const isAdmin = u.role==='Admin';
-  const scope = isAdmin ? (window._tsTeam || (DB.teams[0] && DB.teams[0].name) || null) : teamLedBy(u.maNV);
+  const { scope } = teamSummaryScope(u);
   if (!scope) return;
   const from = window._tsFrom || todayStr(), to = window._tsTo || todayStr();
   const { rows, totalQty, totalLaborHour, totalTheoreticalHour, overallProductivity } = buildTeamSummaryRows(scope, from, to);
@@ -3539,6 +3800,14 @@ window.addEventListener('scroll', ()=>{
   currentSession = loadSession();
   if (currentSession) route='dashboard';
   render();
+  // Con phien dang nhap (Ghi nho dang nhap): dong bo ngay du lieu moi nhat tu Server (truoc day chi hien du lieu
+  // cu luu tren may cho toi khi bam "Lam moi du lieu"). Gui not hang doi cu (neu co) truoc.
+  if (currentSession && API_URL){
+    const bootSession = currentSession;
+    syncPendingQueue().catch(()=>{}).then(()=>syncEmployeesAndTeamsFromAPI(bootSession)).then(()=>{
+      if (currentSession && currentSession.maNV===bootSession.maNV) render();
+    }).catch(()=>{});
+  }
   // BR-203: phiên 8h idle / remember-me 30 ngày trước đây chỉ được kiểm tra lúc tải lại trang (F5).
   // Kiểm tra định kỳ để phiên thực sự tự hết hạn ngay cả khi tab vẫn đang mở, không cần F5.
   setInterval(()=>{
