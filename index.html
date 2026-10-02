@@ -91,7 +91,9 @@
     .skip-link:focus { transform: translateY(0); }
 
     /* ================= KHUNG ỨNG DỤNG — Sidebar tối + nền sáng ================= */
-    #app { @apply flex flex-col; min-height: 100vh; min-height: 100dvh; }
+    /* svh (KHONG dung dvh): dvh thay doi lien tuc khi thanh dia chi cua trinh duyet dien thoai co/gian luc cuon, buoc
+       ca trang tinh lai bo cuc o tung khung hinh => giat. svh co dinh nen khong gay tinh lai. */
+    #app { @apply flex flex-col; min-height: 100vh; min-height: 100svh; }
     .app-shell { @apply flex-1 flex flex-col md:flex-row; }
 
     /* ---- Sidebar (chỉ máy tính/tablet ngang) ---- */
@@ -124,7 +126,7 @@
 
     /* ---- Thanh trên (chỉ điện thoại) ---- */
     .content-area { @apply flex-1 min-w-0 flex flex-col; }
-    .mobile-topbar { @apply flex md:hidden items-center gap-3 px-4 py-3 sticky top-0 z-20; background: var(--c-side); padding-top: max(12px, env(safe-area-inset-top)); transition: transform .3s var(--ease-out); }
+    .mobile-topbar { @apply flex md:hidden items-center gap-3 px-4 py-3 sticky top-0 z-20; background: var(--c-side); padding-top: max(12px, env(safe-area-inset-top)); transition: transform .28s var(--ease-out); will-change: transform; }
     .mobile-topbar .titles { @apply flex-1 min-w-0; }
     .mobile-topbar .line1 { @apply hidden; }
     .mobile-topbar h1 { @apply text-[15px] font-semibold text-white truncate m-0 mt-0.5; }
@@ -146,7 +148,7 @@
     main { @apply flex-1 w-full max-w-[1400px] mx-auto px-4 pb-28 md:px-8 md:pb-12; }
 
     /* ---- Thanh điều hướng dưới (chỉ điện thoại) ---- */
-    .bottomtabs { @apply flex md:hidden sticky bottom-0 z-20; background: var(--c-surface); border-top: 1px solid var(--c-border); box-shadow: 0 -4px 16px rgba(15,23,42,.06); padding-bottom: env(safe-area-inset-bottom); transition: transform .3s var(--ease-out); }
+    .bottomtabs { @apply flex md:hidden sticky bottom-0 z-20; background: var(--c-surface); border-top: 1px solid var(--c-border); box-shadow: 0 -4px 16px rgba(15,23,42,.06); padding-bottom: env(safe-area-inset-bottom); transition: transform .28s var(--ease-out); will-change: transform; }
     .bottomtabs button { @apply relative flex-1 min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium min-h-[58px]; color: var(--c-text-3); transition: color var(--dur-fast); }
     .bottomtabs button > :not(.ic) { @apply truncate max-w-full; }
     .bottomtabs button .ic { @apply w-[22px] h-[22px]; }
@@ -253,7 +255,7 @@
     .tablewrap { @apply overflow-x-auto; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface); scrollbar-width: thin; scrollbar-color: #CBD5E1 transparent; }
     table { @apply w-full border-collapse text-[13.5px]; font-variant-numeric: tabular-nums; }
     th, td { @apply px-3.5 py-3 text-left whitespace-nowrap; border-bottom: 1px solid var(--c-border); }
-    th { @apply text-[11.5px] uppercase tracking-[0.05em] font-bold select-none sticky top-0 z-10; color: var(--c-text-3); background: var(--c-surface-2); }
+    th { @apply text-[11.5px] uppercase tracking-[0.05em] font-bold select-none; color: var(--c-text-3); background: var(--c-surface-2); }
     th[data-action] { @apply cursor-pointer; }
     th[data-action]:hover { color: var(--c-text); }
     th.sorted { color: var(--c-primary); }
@@ -3239,6 +3241,7 @@ function render(){
     default: html = viewDashboard();
   }
   app.innerHTML = html;
+  __barsHidden = false; __scrollDir = 0; __scrollAnchorY = window.scrollY || 0; // 2 thanh dieu huong la node moi, dang hien
   attachShellEvents();
 }
 
@@ -3962,22 +3965,43 @@ function exportTeamSummary(){
    sua Work Record...), 2 phan tu Header/Bottom Nav la CAC NODE DOM MOI moi lan render — nen phai truy van lai
    bang querySelector NGAY TRONG moi lan cuon, khong duoc cache tham chieu tu truoc, neu khong se thao tac
    nham len node DOM cu da bi go bo khoi trang. */
-let __lastScrollY = window.scrollY || 0;
-window.addEventListener('scroll', ()=>{
-  const currentY = window.scrollY || document.documentElement.scrollTop || 0;
+/* CHONG GIAT KHI CUON (2026-10-02): ban cu an thanh ngay khi cuon xuong 1px va hien lai ngay khi cuon len 1px. Ngon
+   tay/quan tinh cuon khong bao gio deu tuyet doi (rung nguoc vai px), va iOS con "nay" o dau/cuoi trang — nen 2 thanh
+   doi trang thai hang chuc lan trong 1 lan vuot, moi lan lai khoi dong lai hieu ung truot 0.3s => giat. Ban moi:
+   - NGUONG DEM: chi an sau khi cuon xuong lien tuc > SCROLL_HIDE_AFTER px; chi hien sau khi cuon len lien tuc >
+     SCROLL_SHOW_AFTER px (tinh tu diem doi chieu gan nhat) — rung vai px bi bo qua.
+   - Luon HIEN o gan dau trang va o cuoi trang (noi iOS nay) — khong an/hien xen ke o 2 dau.
+   - Gop xu ly ve 1 lan / khung hinh (requestAnimationFrame) thay vi chay o moi su kien scroll. */
+const SCROLL_TOP_ZONE = 56;     // px: trong vung nay luon hien thanh
+const SCROLL_HIDE_AFTER = 24;   // px cuon xuong lien tuc truoc khi an
+const SCROLL_SHOW_AFTER = 12;   // px cuon len lien tuc truoc khi hien
+const SCROLL_BOTTOM_ZONE = 24;  // px: gan cuoi trang luon hien thanh (de bam duoc menu, tranh nay iOS)
+let __lastScrollY = 0, __scrollAnchorY = 0, __scrollDir = 0, __barsHidden = false, __scrollFramePending = false;
+function applyBarsHidden(hidden){
+  if (hidden === __barsHidden) return; // khong doi trang thai -> khong dung vao DOM
+  __barsHidden = hidden;
+  // render() thay toan bo #app nen 2 thanh la NODE MOI sau moi lan render — truy van lai moi lan, khong cache.
   const header = document.querySelector('.mobile-topbar');
   const bottomNav = document.querySelector('.bottomtabs');
-  const scrolledDown = currentY > __lastScrollY;
-  const pastThreshold = currentY > 50; // chi bat dau an sau khi cuon qua 50px, tranh rung lac ngay dau trang
-  if (scrolledDown && pastThreshold){
-    if (header) header.classList.add('scroll-down');
-    if (bottomNav) bottomNav.classList.add('scroll-down');
-  } else {
-    // Cuon LEN (bat ky vi tri nao) -> hien lai ngay ca 2 thanh.
-    if (header) header.classList.remove('scroll-down');
-    if (bottomNav) bottomNav.classList.remove('scroll-down');
-  }
-  __lastScrollY = currentY < 0 ? 0 : currentY; // tranh gia tri am do hieu ung "bounce" cuon qua da tren iOS
+  if (header) header.classList.toggle('scroll-down', hidden);
+  if (bottomNav) bottomNav.classList.toggle('scroll-down', hidden);
+}
+function handleScrollFrame(){
+  __scrollFramePending = false;
+  const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  // Kep ve [0, maxY]: bo qua phan "nay" vuot qua dau/cuoi trang cua iOS.
+  const y = Math.min(Math.max(window.scrollY || document.documentElement.scrollTop || 0, 0), maxY);
+  const dir = y > __lastScrollY ? 1 : (y < __lastScrollY ? -1 : 0);
+  if (dir !== 0 && dir !== __scrollDir){ __scrollDir = dir; __scrollAnchorY = __lastScrollY; } // doi chieu: dat lai diem doi chieu
+  __lastScrollY = y;
+  if (y <= SCROLL_TOP_ZONE || y >= maxY - SCROLL_BOTTOM_ZONE){ applyBarsHidden(false); return; }
+  if (dir === 1 && y - __scrollAnchorY > SCROLL_HIDE_AFTER) applyBarsHidden(true);
+  else if (dir === -1 && __scrollAnchorY - y > SCROLL_SHOW_AFTER) applyBarsHidden(false);
+}
+window.addEventListener('scroll', ()=>{
+  if (__scrollFramePending) return;
+  __scrollFramePending = true;
+  requestAnimationFrame(handleScrollFrame);
 }, { passive: true });
 
 /* ---------------- Boot ---------------- */
