@@ -2,21 +2,22 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F172A">
 <title>Condor Productivity</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"
   onerror="var s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js'; document.head.appendChild(s);"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
     theme: {
       extend: {
         screens: { md: '820px' },
-        fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+        fontFamily: { sans: ['Be Vietnam Pro', 'Noto Sans', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
         colors: {
           brand: {
             50:'#eff6ff', 100:'#dbeafe', 200:'#bfdbfe', 300:'#93c5fd', 400:'#60a5fa',
@@ -29,171 +30,271 @@
   };
 </script>
 <style type="text/tailwindcss">
+  /* ============================================================================================
+     CONDOR PRODUCTIVITY — DESIGN SYSTEM (2026-10-02)
+     Phong cách: Minimalism & Swiss (dashboard doanh nghiệp) — gọn, rõ, tương phản cao, ít trang trí.
+     Khớp ui-rules-v2.md: Sidebar tối slate-900 + nền sáng slate-50, primary blue-600/700, bo góc 12px.
+     Font: Be Vietnam Pro (hiển thị dấu tiếng Việt tốt) + Noto Sans dự phòng.
+     Mọi màu đi qua TOKEN bên dưới — đổi thương hiệu chỉ cần sửa ở :root, không sửa từng component.
+     ============================================================================================ */
   @layer base {
+    :root {
+      /* Bề mặt & viền */
+      --c-bg: #F8FAFC; --c-surface: #FFFFFF; --c-surface-2: #F1F5F9;
+      --c-border: #E2E8F0; --c-border-strong: #CBD5E1;
+      /* Chữ — đều đạt tương phản ≥ 4.5:1 trên nền trắng */
+      --c-text: #0F172A; --c-text-2: #334155; --c-text-3: #5B6B82;
+      /* Thương hiệu */
+      --c-primary: #2563EB; --c-primary-hover: #1D4ED8; --c-primary-soft: #EFF6FF; --c-primary-border: #BFDBFE;
+      /* Trạng thái */
+      --c-success: #047857; --c-success-soft: #ECFDF5; --c-success-border: #A7F3D0;
+      --c-warning: #92400E; --c-warning-soft: #FFFBEB; --c-warning-border: #FDE68A;
+      --c-danger: #BE123C;  --c-danger-soft: #FFF1F2;  --c-danger-border: #FECDD3; --c-danger-solid: #DC2626;
+      /* Sidebar tối */
+      --c-side: #0F172A; --c-side-hover: rgba(255,255,255,.06); --c-side-active: rgba(255,255,255,.10);
+      --c-side-text: #CBD5E1; --c-side-muted: #94A3B8;
+      /* Hình khối & chuyển động */
+      --radius: 12px; --radius-sm: 8px;
+      --shadow-1: 0 1px 2px rgba(15,23,42,.05);
+      --shadow-2: 0 4px 14px rgba(15,23,42,.08);
+      --shadow-3: 0 24px 48px rgba(15,23,42,.22);
+      --ease-out: cubic-bezier(.2,.8,.2,1);
+      --dur-fast: 120ms; --dur: 200ms;
+      /* Giữ lại 2 biến cũ vì vài chuỗi style="" trong script còn tham chiếu trực tiếp. */
+      --ink: #0F172A; --line: #CBD5E1;
+    }
     html, body { @apply h-full; }
-    body { @apply bg-[#F8FAFC] text-slate-800 font-sans antialiased m-0 p-0; }
-    button, input, select { font-family: inherit; }
-    button { @apply cursor-pointer; }
-    /* Kept only because a couple of inline style="" strings in the (otherwise untouched) original
-       script still reference these two var() names directly for non-visual-critical fallback text. */
-    :root { --ink: #1e293b; --line: #cbd5e1; }
+    body {
+      @apply font-sans antialiased m-0 p-0;
+      background: var(--c-bg); color: var(--c-text-2);
+      font-size: 15px; line-height: 1.55;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button, input, select, textarea { font-family: inherit; }
+    button { @apply cursor-pointer; touch-action: manipulation; }
+    button:disabled { @apply cursor-not-allowed; }
+    h1, h2, h3 { color: var(--c-text); text-wrap: balance; }
+    b, strong { font-weight: 600; }
+    /* Vòng focus rõ ràng cho người dùng bàn phím (không hiện khi bấm chuột/chạm) */
+    :focus { outline: none; }
+    :focus-visible { outline: 2px solid var(--c-primary); outline-offset: 2px; border-radius: 6px; }
+    ::selection { background: #BFDBFE; }
+    /* Tôn trọng cài đặt "giảm chuyển động" của hệ điều hành */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+    }
   }
 
   @layer components {
-    /* ================= APP SHELL — Dark Sidebar + Light Canvas ================= */
-    #app { @apply min-h-screen flex flex-col; }
+    /* ================= Liên kết bỏ qua (bàn phím) ================= */
+    .skip-link { @apply fixed left-3 top-3 z-[200] px-4 py-2.5 rounded-lg font-semibold text-sm text-white; background: var(--c-primary); transform: translateY(-160%); transition: transform var(--dur) var(--ease-out); }
+    .skip-link:focus { transform: translateY(0); }
+
+    /* ================= KHUNG ỨNG DỤNG — Sidebar tối + nền sáng ================= */
+    #app { @apply flex flex-col; min-height: 100vh; min-height: 100dvh; }
     .app-shell { @apply flex-1 flex flex-col md:flex-row; }
 
-    /* ---- Sidebar (desktop only) ---- */
-    .sidebar { @apply hidden md:flex md:flex-col md:w-64 md:flex-none md:h-screen md:sticky md:top-0 bg-slate-900 text-slate-300; }
-    .sidebar-brand { @apply flex items-center gap-3 px-5 py-5 border-b border-white/10; }
-    .sidebar-brand .logo { @apply w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-extrabold text-sm flex-none shadow-lg shadow-brand-600/30; }
+    /* ---- Sidebar (chỉ máy tính/tablet ngang) ---- */
+    .sidebar { @apply hidden md:flex md:flex-col md:w-[248px] md:flex-none md:h-screen md:sticky md:top-0; background: var(--c-side); color: var(--c-side-text); }
+    .sidebar-brand { @apply flex items-center gap-3 px-5 py-5; border-bottom: 1px solid rgba(255,255,255,.08); }
+    .sidebar-brand .logo, .mobile-topbar .logo { @apply w-9 h-9 rounded-[10px] flex items-center justify-center text-white font-extrabold text-sm flex-none; background: var(--c-primary); }
     .brand-titles { @apply min-w-0; }
-    .brand-sub { @apply text-[10px] tracking-[0.15em] text-slate-500 uppercase font-bold; }
-    .brand-title { @apply text-white font-bold text-[13.5px] truncate; }
-    .version-badge { @apply text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded ml-1 font-medium align-middle; }
+    .brand-sub { @apply text-[10.5px] tracking-[0.16em] uppercase font-bold; color: var(--c-side-muted); }
+    .brand-title { @apply text-white font-semibold text-[13.5px] truncate; }
+    .version-badge { @apply text-[10px] px-1.5 py-0.5 rounded ml-1 font-medium align-middle; background: rgba(255,255,255,.10); color: var(--c-side-text); }
 
-    .sidebar-nav { @apply flex-1 px-3 py-4 flex flex-col gap-1 overflow-y-auto; }
-    .sidenav-item { @apply flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13.5px] font-semibold text-slate-400 hover:bg-white/5 hover:text-white transition-colors w-full text-left; }
-    .sidenav-item.active { @apply bg-brand-600 text-white shadow-md shadow-brand-600/30 hover:bg-brand-600 hover:text-white; }
+    .sidebar-nav { @apply flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto; }
+    .sidenav-item { @apply relative flex items-center gap-3 px-3.5 min-h-[44px] rounded-[10px] text-[13.5px] font-medium w-full text-left; color: var(--c-side-text); transition: background-color var(--dur-fast), color var(--dur-fast); }
+    .sidenav-item:hover { background: var(--c-side-hover); color: #fff; }
+    .sidenav-item.active { background: var(--c-side-active); color: #fff; font-weight: 600; }
+    /* Vạch chỉ thị vị trí hiện tại — không chỉ dựa vào màu nền */
+    .sidenav-item.active::before { content: ''; @apply absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-full; background: #60A5FA; }
+    .sidenav-item:focus-visible { outline-color: #93C5FD; }
     .sidenav-icon { @apply w-[18px] h-[18px] flex-none; }
     .sidenav-icon svg { @apply w-full h-full; }
 
-    .sidebar-profile { @apply flex items-center gap-2.5 px-4 py-4 border-t border-white/10; }
+    .sidebar-profile { @apply flex items-center gap-2.5 px-4 py-4; border-top: 1px solid rgba(255,255,255,.08); }
     .profile-info { @apply flex-1 min-w-0 leading-tight; }
     .profile-info b { @apply block text-white text-[13px] font-semibold truncate; }
-    .profile-info span { @apply block text-[11px] text-slate-500 truncate mt-0.5; }
-    .profile-logout { @apply flex-none w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-white/10 hover:text-white transition-colors; }
-    .profile-logout svg { @apply w-[17px] h-[17px]; }
+    .profile-info span { @apply block text-[11.5px] truncate mt-0.5; color: var(--c-side-muted); }
+    .profile-logout { @apply flex-none w-10 h-10 rounded-[10px] flex items-center justify-center; color: var(--c-side-muted); transition: background-color var(--dur-fast), color var(--dur-fast); }
+    .profile-logout:hover { background: var(--c-side-hover); color: #fff; }
+    .profile-logout:focus-visible { outline-color: #93C5FD; }
+    .profile-logout svg { @apply w-[18px] h-[18px]; }
 
-    /* ---- Mobile top bar (mobile only — desktop uses the sidebar instead) ---- */
+    /* ---- Thanh trên (chỉ điện thoại) ---- */
     .content-area { @apply flex-1 min-w-0 flex flex-col; }
-    .mobile-topbar { @apply flex md:hidden items-center gap-3 bg-slate-900 px-5 py-3.5 sticky top-0 z-20; }
-    .mobile-topbar .logo { @apply flex-none w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-extrabold text-[13px]; }
+    .mobile-topbar { @apply flex md:hidden items-center gap-3 px-4 py-3 sticky top-0 z-20; background: var(--c-side); padding-top: max(12px, env(safe-area-inset-top)); transition: transform .3s var(--ease-out); }
     .mobile-topbar .titles { @apply flex-1 min-w-0; }
-    .mobile-topbar .line1 { @apply text-[10px] tracking-wider text-slate-500 uppercase font-medium; }
-    .mobile-topbar h1 { @apply text-[15px] font-bold text-white truncate m-0 mt-0.5; }
-    .mobile-topbar .userbox { @apply text-[11px] text-right text-slate-500 flex-none; }
+    .mobile-topbar .line1 { @apply hidden; }
+    .mobile-topbar h1 { @apply text-[15px] font-semibold text-white truncate m-0 mt-0.5; }
+    .mobile-topbar .userbox { @apply text-[11px] text-right flex-none leading-tight; color: var(--c-side-muted); }
     .mobile-topbar .userbox b { @apply block text-white text-[12.5px] font-semibold; }
-    .mobile-topbar .logoutBtn { @apply ml-1.5 flex-none rounded-lg border border-white/10 text-slate-300 text-[11px] px-2.5 py-1.5 hover:bg-white/10 hover:text-white transition-colors; }
-    /* Tu dong an Header khi cuon xuong (chi tren di dong — desktop dung sidebar co dinh, khong bi anh huong
-       vi .mobile-topbar da "md:hidden" san). Truot LEN (-100%) de bien mat qua canh tren man hinh. */
-    .mobile-topbar { transition: transform 0.3s ease-in-out; }
+    .mobile-topbar .logoutBtn { @apply ml-1 flex-none rounded-[10px] w-11 h-11 flex items-center justify-center; border: 1px solid rgba(255,255,255,.16); color: var(--c-side-text); transition: background-color var(--dur-fast); }
+    .mobile-topbar .logoutBtn svg { @apply w-[18px] h-[18px]; }
+    .mobile-topbar .logoutBtn:hover { background: var(--c-side-hover); color: #fff; }
     .mobile-topbar.scroll-down { transform: translateY(-100%); }
 
-    /* ---- Content header (page title + status pill) ---- */
-    .content-header { @apply flex items-center justify-between gap-3 px-5 pt-5 pb-4 md:px-8 md:pt-8 md:pb-6; }
-    .page-title { @apply text-xl md:text-[26px] font-extrabold text-slate-900 m-0 tracking-tight; }
-    .offline-pill { @apply inline-flex items-center gap-1.5 text-[12px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-[7px] rounded-full flex-none cursor-pointer transition-colors; }
-    .offline-pill:hover { @apply bg-blue-100; }
-    .offline-pill.has-pending { @apply text-amber-700 bg-amber-50 border-amber-300; }
-    .offline-pill.has-pending:hover { @apply bg-amber-100; }
+    /* ---- Tiêu đề trang + nút Làm mới ---- */
+    .content-header { @apply flex items-center justify-between gap-3 px-4 pt-5 pb-4 md:px-8 md:pt-8 md:pb-6; }
+    .page-title { @apply text-[22px] md:text-[28px] font-bold m-0 tracking-tight leading-tight; color: var(--c-text); }
+    .offline-pill { @apply inline-flex items-center gap-2 text-[13px] font-semibold px-3.5 min-h-[40px] rounded-[10px] flex-none; background: var(--c-surface); color: var(--c-text-2); border: 1px solid var(--c-border-strong); box-shadow: var(--shadow-1); transition: background-color var(--dur-fast), border-color var(--dur-fast); }
+    .offline-pill svg { @apply w-4 h-4 flex-none; }
+    .offline-pill:hover { background: var(--c-surface-2); border-color: #94A3B8; }
+    .offline-pill.has-pending { color: var(--c-warning); background: var(--c-warning-soft); border-color: var(--c-warning-border); }
 
-    main { @apply flex-1 w-full max-w-[1400px] mx-auto px-5 pb-24 md:px-8 md:pb-10; }
+    main { @apply flex-1 w-full max-w-[1400px] mx-auto px-4 pb-28 md:px-8 md:pb-12; }
 
-    /* ---- Bottom tab bar (mobile only) ---- */
-    .bottomtabs { @apply flex md:hidden sticky bottom-0 z-20 bg-white border-t border-slate-200; box-shadow: 0 -2px 10px rgba(0,0,0,0.04); }
-    .bottomtabs button { @apply flex-1 flex flex-col items-center gap-1 py-2.5 text-[11px] font-semibold text-slate-500 min-h-[56px]; }
-    .bottomtabs button .ic { @apply w-5 h-5; }
-    .bottomtabs button.active { @apply text-brand-600; }
-    /* Tu dong an Bottom Nav khi cuon xuong (chi tren di dong — .bottomtabs da "md:hidden" san nen desktop
-       khong bi anh huong). Truot XUONG (+100%) de bien mat qua canh duoi man hinh, nguoc huong voi Header. */
-    .bottomtabs { transition: transform 0.3s ease-in-out; }
+    /* ---- Thanh điều hướng dưới (chỉ điện thoại) ---- */
+    .bottomtabs { @apply flex md:hidden sticky bottom-0 z-20; background: var(--c-surface); border-top: 1px solid var(--c-border); box-shadow: 0 -4px 16px rgba(15,23,42,.06); padding-bottom: env(safe-area-inset-bottom); transition: transform .3s var(--ease-out); }
+    .bottomtabs button { @apply relative flex-1 min-w-0 flex flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium min-h-[58px]; color: var(--c-text-3); transition: color var(--dur-fast); }
+    .bottomtabs button > :not(.ic) { @apply truncate max-w-full; }
+    .bottomtabs button .ic { @apply w-[22px] h-[22px]; }
+    .bottomtabs button .ic svg { @apply w-full h-full; }
+    .bottomtabs button.active { color: var(--c-primary); font-weight: 700; }
+    .bottomtabs button.active::before { content: ''; @apply absolute top-0 left-1/2 -translate-x-1/2 w-8 h-[3px] rounded-b-full; background: var(--c-primary); }
     .bottomtabs.scroll-down { transform: translateY(100%); }
+    /* Menu "Thêm" (khi có hơn 5 mục điều hướng trên điện thoại) */
+    .more-nav { @apply grid grid-cols-1 gap-1.5; }
+    .more-nav button { @apply flex items-center gap-3 px-4 min-h-[52px] rounded-[10px] text-[15px] font-semibold text-left; color: var(--c-text-2); border: 1px solid var(--c-border); background: var(--c-surface); }
+    .more-nav button .ic { @apply w-5 h-5 flex-none; color: var(--c-text-3); }
+    .more-nav button .ic svg { @apply w-full h-full; }
+    .more-nav button.active { color: var(--c-primary); border-color: var(--c-primary-border); background: var(--c-primary-soft); }
+    .more-nav button.active .ic { color: var(--c-primary); }
 
-    /* ================= Cards & sections ================= */
-    .card { @apply bg-white border border-slate-100 rounded-xl shadow-sm p-5 mb-4; }
-    .section-title { @apply text-[12px] font-bold uppercase tracking-wider text-slate-500 mb-3; }
+    /* ================= Thẻ & tiêu đề mục ================= */
+    .card { @apply p-4 md:p-5 mb-4; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius); box-shadow: var(--shadow-1); }
+    .section-title { @apply text-[12.5px] font-bold uppercase tracking-[0.06em] mb-3; color: var(--c-text-2); }
 
-    /* ================= Forms ================= */
-    label { @apply block text-[13px] font-semibold text-slate-500 mb-1.5; }
-    .req { @apply text-rose-500; }
+    /* ================= Form ================= */
+    label { @apply block text-[13px] font-semibold mb-1.5; color: var(--c-text-2); }
+    .req { color: var(--c-danger); }
     input[type=text], input[type=password], input[type=number], input[type=date], input[type=time], input[type=month], select, textarea {
-      @apply w-full px-3.5 py-3 border border-slate-300 rounded-xl text-[15px] text-slate-800 bg-white min-h-[48px] transition-colors;
+      @apply w-full px-3.5 py-2.5 min-h-[48px];
+      font-size: 16px; /* ≥16px để iPhone không tự phóng to khi chạm vào ô nhập */
+      color: var(--c-text); background: var(--c-surface);
+      border: 1px solid var(--c-border-strong); border-radius: 10px;
+      transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
     }
-    input:focus, select:focus, textarea:focus { @apply outline-none ring-2 ring-brand-500 border-brand-500; }
+    input::placeholder, textarea::placeholder { color: #8090A6; }
+    input:hover, select:hover, textarea:hover { border-color: #94A3B8; }
+    input:focus, select:focus, textarea:focus { border-color: var(--c-primary); box-shadow: 0 0 0 3px rgba(37,99,235,.22); outline: none; }
+    input[type=checkbox] { @apply w-5 h-5 flex-none cursor-pointer; accent-color: var(--c-primary); }
+    input[type=file] { @apply text-[14px]; color: var(--c-text-2); }
+    input[type=file]::file-selector-button { @apply mr-3 px-3.5 min-h-[40px] rounded-lg font-semibold text-[13px] cursor-pointer; border: 1px solid var(--c-border-strong); background: var(--c-surface); color: var(--c-text-2); }
     .field { @apply mb-4; }
-    .field .err { @apply text-rose-500 text-[12.5px] mt-1.5 font-semibold; }
-    .field.has-err input, .field.has-err select { @apply border-rose-400; }
-    .row2 { @apply grid grid-cols-2 gap-2.5; }
+    .row2 { @apply grid grid-cols-2 gap-3; }
+
+    /* Thông báo lỗi: dạng hộp (ngoài ô nhập) và dạng dòng nhỏ ngay dưới ô nhập */
+    .err { @apply text-[13.5px] font-medium px-3.5 py-2.5 rounded-[10px] leading-relaxed; color: var(--c-danger); background: var(--c-danger-soft); border: 1px solid var(--c-danger-border); }
+    .field .err { @apply text-[13px] font-semibold mt-1.5 p-0 rounded-none; background: none; border: 0; }
+    .field.has-err input, .field.has-err select { border-color: var(--c-danger); }
 
     .btnlist { @apply flex flex-wrap gap-2; }
-    .btnlist button { @apply min-h-[48px] px-4 py-2.5 border border-slate-300 rounded-xl bg-white font-semibold text-sm text-slate-600 hover:border-brand-300 transition-colors; }
-    .btnlist button.active { @apply bg-brand-600 border-brand-600 text-white shadow-sm hover:border-brand-600; }
+    .btnlist button { @apply min-h-[48px] px-4 py-2.5 rounded-[10px] font-semibold text-[14px]; background: var(--c-surface); color: var(--c-text-2); border: 1px solid var(--c-border-strong); transition: background-color var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast); }
+    .btnlist button:hover { border-color: var(--c-primary); color: var(--c-primary-hover); }
+    .btnlist button.active { background: var(--c-primary); border-color: var(--c-primary); color: #fff; box-shadow: var(--shadow-1); }
     .btnlist.grow button { @apply flex-1 min-w-[110px]; }
 
-    .btn { @apply inline-flex items-center justify-center gap-1.5 min-h-[48px] px-5 rounded-xl font-bold text-[14.5px] transition-colors; }
-    .btn-primary { @apply bg-brand-600 text-white w-full hover:bg-brand-700 shadow-sm; }
-    .btn-primary:disabled { @apply bg-slate-300 cursor-not-allowed hover:bg-slate-300; }
-    .btn-outline { @apply bg-white border border-slate-300 text-slate-700 hover:bg-slate-50; }
-    .btn-danger { @apply bg-rose-600 text-white hover:bg-rose-700; }
-    .btn-sm { @apply min-h-[36px] px-3 text-[13px] rounded-lg; }
+    .btn { @apply inline-flex items-center justify-center gap-2 min-h-[48px] px-5 font-semibold text-[15px]; border-radius: 10px; transition: background-color var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast), opacity var(--dur-fast); }
+    .btn:active:not(:disabled) { transform: scale(.985); }
+    .btn svg { @apply w-[18px] h-[18px] flex-none; }
+    .btn-primary { @apply w-full text-white; background: var(--c-primary); box-shadow: var(--shadow-1); }
+    .btn-primary:hover { background: var(--c-primary-hover); }
+    .btn-primary:disabled { background: #94A3B8; box-shadow: none; }
+    .btn-outline { background: var(--c-surface); color: var(--c-text-2); border: 1px solid var(--c-border-strong); }
+    .btn-outline:hover { background: var(--c-surface-2); border-color: #94A3B8; }
+    .btn-danger { @apply text-white; background: var(--c-danger-solid); }
+    .btn-danger:hover { background: #B91C1C; }
+    .btn-sm { @apply min-h-[40px] px-3.5 text-[13.5px]; border-radius: 8px; }
+    /* Vòng xoay "đang xử lý" trong nút (thay cho emoji) */
+    .spinner { @apply inline-block w-4 h-4 rounded-full flex-none; border: 2px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-    .hint { @apply text-xs text-slate-400 mt-1.5 leading-relaxed; }
-    .readout { @apply bg-slate-50 rounded-xl px-3.5 py-2.5 text-[13.5px] text-slate-600 border border-slate-200; }
+    .hint { @apply text-[12.5px] mt-1.5 leading-relaxed; color: var(--c-text-3); }
+    .readout { @apply px-3.5 py-2.5 text-[14px]; background: var(--c-surface-2); color: var(--c-text-2); border: 1px solid var(--c-border); border-radius: 10px; }
 
-    /* ================= Status pills ================= */
-    .pill { @apply inline-block px-3 py-1 rounded-full font-bold text-[12px]; }
-    .pill.go { @apply bg-emerald-100 text-emerald-700; }
-    .pill.amber { @apply bg-amber-100 text-amber-700; }
-    .pill.warn { @apply bg-rose-100 text-rose-700; }
-    .pill.na { @apply bg-slate-100 text-slate-500; }
+    /* ================= Nhãn trạng thái (có chấm màu + chữ, không chỉ dựa vào màu) ================= */
+    .pill { @apply inline-flex items-center gap-1.5 px-2.5 py-[3px] rounded-full font-semibold text-[12px] whitespace-nowrap; border: 1px solid transparent; }
+    .pill::before { content: ''; @apply w-1.5 h-1.5 rounded-full flex-none; background: currentColor; }
+    .pill.go { color: var(--c-success); background: var(--c-success-soft); border-color: var(--c-success-border); }
+    .pill.amber { color: var(--c-warning); background: var(--c-warning-soft); border-color: var(--c-warning-border); }
+    .pill.warn { color: var(--c-danger); background: var(--c-danger-soft); border-color: var(--c-danger-border); }
+    .pill.na { color: var(--c-text-3); background: var(--c-surface-2); border-color: var(--c-border); }
+    /* Dòng trạng thái tốt / chú giải có chấm màu */
+    .ok-line { @apply flex items-center gap-2 py-2.5 px-1 text-[14px] font-semibold; color: var(--c-success); }
+    .ok-line svg { @apply w-[18px] h-[18px] flex-none; }
+    .legend-dot { @apply inline-block w-2.5 h-2.5 rounded-full mr-2 align-middle; }
 
-    /* ================= KPI cards ================= */
-    .kpis { @apply grid grid-cols-2 md:grid-cols-4 gap-4 mb-5; }
-    .kpi { @apply bg-white border border-slate-100 rounded-xl shadow-sm px-4 py-4; }
-    .kpi .l { @apply text-[11.5px] font-semibold text-slate-400 uppercase tracking-wide; }
-    .kpi .v { @apply text-[24px] font-extrabold text-slate-900 mt-0.5; }
-    .kpi-icon-row { @apply flex items-center gap-3.5; }
-    .kpi-icon-box { @apply w-11 h-11 rounded-xl flex items-center justify-center flex-none; }
+    /* ================= Thẻ KPI ================= */
+    .kpis { @apply grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-5; }
+    .kpi { @apply px-4 py-4 min-w-0; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius); box-shadow: var(--shadow-1); transition: border-color var(--dur-fast), box-shadow var(--dur); }
+    .kpi[data-route] { @apply cursor-pointer; }
+    .kpi[data-route]:hover { border-color: var(--c-primary-border); box-shadow: var(--shadow-2); }
+    .kpi .l { @apply text-[12px] font-semibold uppercase tracking-[0.04em]; color: var(--c-text-3); }
+    .kpi .v { @apply text-[24px] md:text-[28px] font-bold mt-0.5 leading-tight; color: var(--c-text); font-variant-numeric: tabular-nums; }
+    .kpi-icon-row { @apply flex items-center gap-3; }
+    .kpi-icon-row > div:last-child { @apply min-w-0; }
+    .kpi-icon-box { @apply w-10 h-10 rounded-[10px] flex items-center justify-center flex-none; }
     .kpi-icon-box svg { @apply w-5 h-5; }
-    .kpi-icon-box.blue { @apply bg-blue-50 text-blue-600; }
-    .kpi-icon-box.emerald { @apply bg-emerald-50 text-emerald-600; }
-    .kpi-icon-box.amber { @apply bg-amber-50 text-amber-600; }
-    /* Thanh progress bar 2 mau (Truc tiep/Gian tiep) trong the KPI — reusable cho bat ky ty le 2 phan nao khac neu can. */
-    .split-bar { @apply flex w-full h-2 rounded-full overflow-hidden bg-slate-100 mt-2; }
-    .split-bar .seg-a { @apply bg-emerald-500 h-full; }
-    .split-bar .seg-b { @apply bg-amber-400 h-full; }
-    .split-bar-legend { @apply flex justify-between text-[11px] font-semibold mt-1.5; }
-    .split-bar-legend .a { @apply text-emerald-600; }
-    .split-bar-legend .b { @apply text-amber-600; }
-    .kpi-icon-box.violet { @apply bg-violet-50 text-violet-600; }
+    .kpi-icon-box.blue { @apply bg-blue-50 text-blue-700; }
+    .kpi-icon-box.emerald { @apply bg-emerald-50 text-emerald-700; }
+    .kpi-icon-box.amber { @apply bg-amber-50 text-amber-700; }
+    .kpi-icon-box.violet { @apply bg-violet-50 text-violet-700; }
+    /* Thanh tỷ lệ 2 màu (Trực tiếp/Gián tiếp) */
+    .split-bar { @apply flex w-full h-2 rounded-full overflow-hidden mt-2.5; background: var(--c-surface-2); }
+    .split-bar .seg-a { @apply bg-emerald-600 h-full; }
+    .split-bar .seg-b { @apply bg-amber-500 h-full; }
+    .split-bar-legend { @apply flex justify-between text-[11.5px] font-semibold mt-1.5; }
+    .split-bar-legend .a { color: var(--c-success); }
+    .split-bar-legend .b { color: var(--c-warning); }
 
-    /* ================= Tables ================= */
-    .tablewrap { @apply overflow-x-auto -mx-1 px-1; }
-    table { @apply w-full border-collapse text-[13px]; }
-    th, td { @apply px-4 py-3.5 border-b border-slate-100 text-left whitespace-nowrap; }
-    th { @apply text-[11px] uppercase tracking-wider text-slate-400 font-bold cursor-pointer select-none bg-slate-50 sticky top-0 z-10; }
-    th.sorted { @apply text-brand-600; }
-    tbody tr { @apply transition-colors; }
-    tbody tr:hover td { @apply bg-slate-50; }
-    tbody tr.row-warn td { @apply bg-amber-50; }
-    tbody tr.row-warn:hover td { @apply bg-amber-100; }
-    .empty { @apply py-9 px-3 text-center text-slate-400 text-sm flex flex-col items-center gap-3; }
+    /* ================= Bảng dữ liệu ================= */
+    .tablewrap { @apply overflow-x-auto; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface); scrollbar-width: thin; scrollbar-color: #CBD5E1 transparent; }
+    table { @apply w-full border-collapse text-[13.5px]; font-variant-numeric: tabular-nums; }
+    th, td { @apply px-3.5 py-3 text-left whitespace-nowrap; border-bottom: 1px solid var(--c-border); }
+    th { @apply text-[11.5px] uppercase tracking-[0.05em] font-bold select-none sticky top-0 z-10; color: var(--c-text-3); background: var(--c-surface-2); }
+    th[data-action] { @apply cursor-pointer; }
+    th[data-action]:hover { color: var(--c-text); }
+    th.sorted { color: var(--c-primary); }
+    td { color: var(--c-text-2); }
+    tbody tr { transition: background-color var(--dur-fast); }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: #F8FAFC; }
+    tbody tr.row-warn td { background: var(--c-warning-soft); }
+    tbody tr.row-warn:hover td { background: #FEF3C7; }
+    td .btn-sm { @apply min-h-[36px]; }
+
+    .empty { @apply py-10 px-4 text-center text-[14px] flex flex-col items-center gap-3; color: var(--c-text-3); }
     .empty::before {
       content: '';
-      @apply w-12 h-12 opacity-40;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='1.5'%3E%3Crect x='3' y='7' width='18' height='13' rx='2'/%3E%3Cpath d='M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'/%3E%3Cpath d='M3 13h18'/%3E%3C/svg%3E");
+      @apply w-12 h-12 opacity-60;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7h18v13H3z'/%3E%3Cpath d='M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'/%3E%3Cpath d='M3 13h18'/%3E%3C/svg%3E");
       background-size: contain; background-repeat: no-repeat; background-position: center;
     }
 
     .toolbar { @apply flex flex-wrap gap-2 items-center mb-3; }
-    .toolbar input, .toolbar select { @apply w-auto min-h-[40px] px-3 py-2 text-[13.5px]; }
+    .toolbar label { @apply mb-0; }
+    .toolbar > * { @apply min-w-0 max-w-full; }
+    /* max-width: ô lọc có lựa chọn rất dài (tên sản phẩm) không được đẩy trang tràn ngang trên điện thoại */
+    .toolbar input, .toolbar select { @apply w-auto max-w-full min-h-[44px] px-3 py-2 md:text-[14px]; }
+    .toolbar select { @apply md:max-w-[320px] truncate; }
     .search-wrap { @apply relative; }
     .search-wrap input { @apply pl-9; }
-    .search-icon { @apply absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none; }
+    .search-icon { @apply absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none; color: var(--c-text-3); }
 
     /* ================= Toast ================= */
     .toast {
-      @apply fixed bottom-20 right-6 md:bottom-6 bg-slate-900 text-white text-sm font-medium px-4 py-3 rounded-lg shadow-xl border border-slate-800 flex items-center gap-3 opacity-0 pointer-events-none translate-y-2 z-[80];
-      transition: opacity .2s, transform .2s;
+      @apply fixed bottom-20 right-4 md:right-6 md:bottom-6 text-white text-[14px] font-medium pl-4 pr-4 py-3 opacity-0 pointer-events-none translate-y-2 z-[80];
+      max-width: min(440px, calc(100vw - 32px));
+      background: #0F172A; border-radius: 10px; box-shadow: var(--shadow-3);
+      border-left: 4px solid #34D399;
+      transition: opacity var(--dur) var(--ease-out), transform var(--dur) var(--ease-out);
     }
     .toast.show { @apply opacity-100 translate-y-0; }
-    .toast.err { @apply bg-rose-900 border-rose-700; }
+    .toast.err { border-left-color: #FB7185; background: #1F1215; }
 
-    /* ================= Global Loading Bar =================
-       Thanh trang thai toan cuc — hien khi co it nhat 1 request mang (apiCall) dang cho phan hoi, de nguoi
-       dung LUON thay duoc trang "dang xu ly", khong con cam giac "bam ma khong thay gi" khi mang cham/timeout. */
+    /* ================= Thanh tải toàn cục ================= */
     #globalLoadingBar {
       @apply fixed top-0 left-0 h-[3px] w-full z-[100] pointer-events-none opacity-0;
       background: linear-gradient(90deg, transparent, #2563eb, transparent);
@@ -203,43 +304,72 @@
     #globalLoadingBar.show { @apply opacity-100; animation: globalLoadingSlide 1.1s ease-in-out infinite; }
     @keyframes globalLoadingSlide { 0%{background-position:-60% 0;} 100%{background-position:160% 0;} }
 
-    /* ================= Modal ================= */
-    .modal-overlay { @apply fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-end md:items-center justify-center z-[60] p-0 md:p-4; }
-    .modal { @apply bg-white rounded-t-2xl md:rounded-2xl max-w-xl w-full max-h-[88vh] overflow-y-auto p-5 shadow-2xl; }
-    .modal h3 { @apply text-base font-bold mb-3 text-slate-800; }
-    .modal-actions { @apply flex gap-2.5 mt-4; }
+    /* ================= Hộp thoại (điện thoại: trượt từ dưới lên; máy tính: giữa màn hình) ================= */
+    .modal-overlay { @apply fixed inset-0 flex items-end md:items-center justify-center z-[60] p-0 md:p-4; background: rgba(15,23,42,.55); backdrop-filter: blur(3px); animation: overlayIn var(--dur) var(--ease-out); }
+    .modal { @apply relative max-w-xl w-full overflow-y-auto p-5 pt-6 md:p-6; max-height: 88vh; max-height: 88dvh; background: var(--c-surface); border-radius: 18px 18px 0 0; box-shadow: var(--shadow-3); padding-bottom: max(20px, env(safe-area-inset-bottom)); animation: sheetIn .26s var(--ease-out); }
+    .modal::before { content: ''; @apply absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1 rounded-full md:hidden; background: var(--c-border-strong); }
+    .modal h3 { @apply text-[17px] font-bold mb-3 pr-8; color: var(--c-text); }
+    .modal-close { @apply absolute top-3 right-3 w-10 h-10 rounded-[10px] flex items-center justify-center; color: var(--c-text-3); transition: background-color var(--dur-fast), color var(--dur-fast); }
+    .modal-close:hover { background: var(--c-surface-2); color: var(--c-text); }
+    .modal-close svg { @apply w-5 h-5; }
+    .modal-actions { @apply flex gap-2.5 mt-5; }
     .modal-actions .btn { @apply flex-1; }
+    @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes sheetIn { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+    @media (min-width: 820px) { .modal { border-radius: 16px; animation-name: dialogIn; } }
+    @keyframes dialogIn { from { transform: scale(.97); opacity: 0; } to { transform: none; opacity: 1; } }
 
-    /* ================= Bars ================= */
-    .bar { @apply h-3.5 rounded-full bg-brand-600; }
-    .barrow { @apply grid items-center gap-2.5 mb-2.5 text-[13px]; grid-template-columns: 110px 1fr 54px; }
+    /* ================= Thanh tỷ lệ ================= */
+    .bar { @apply h-3 rounded-full; background: var(--c-primary); }
+    .barrow { @apply grid items-center gap-2.5 mb-2.5 text-[13.5px]; grid-template-columns: 110px 1fr 54px; }
 
-    .floating-bar { @apply fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-4 z-40 border border-slate-800; }
-    .floating-bar span { @apply text-sm font-medium text-slate-300; }
-    .btn-floating-approve { @apply bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors; }
+    .floating-bar { @apply fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 text-white px-5 py-2.5 flex items-center gap-4 z-40; background: #0F172A; border-radius: 14px; box-shadow: var(--shadow-3); max-width: calc(100vw - 24px); }
+    .floating-bar span { @apply text-[14px] font-medium text-slate-200 whitespace-nowrap; }
+    .btn-floating-approve { @apply text-white text-[14px] font-semibold px-4 min-h-[44px] rounded-[10px] whitespace-nowrap; background: #059669; transition: background-color var(--dur-fast); }
+    .btn-floating-approve:hover { background: #047857; }
 
-    /* ================= Login ================= */
-    .login-wrap { @apply flex-1 flex items-center justify-center p-5 bg-slate-900; }
-    .login-card { @apply max-w-sm w-full bg-white border border-slate-100 rounded-2xl shadow-2xl p-7; }
-    .login-card .logo { @apply w-12 h-12 rounded-2xl bg-brand-600 mx-auto mb-3.5 flex items-center justify-center text-white font-extrabold text-lg shadow-lg shadow-brand-600/30; }
-    .login-card h1 { @apply text-center text-lg font-bold m-0 mb-1 text-slate-800; }
-    .login-card .sub { @apply text-center text-slate-400 text-[12.5px] mb-5; }
-    .checkline { @apply flex items-center gap-2 text-[13.5px] text-slate-500 my-1 mb-4 font-medium; }
-    .checkline input { @apply w-auto min-h-0; }
-    .banner { @apply bg-amber-50 border border-amber-200 text-amber-700 text-[12.5px] px-3 py-2.5 rounded-xl mt-3.5 leading-relaxed; }
+    /* ================= Đăng nhập ================= */
+    .login-wrap { @apply flex-1 flex items-center justify-center p-5;
+      background-color: var(--c-side);
+      background-image: radial-gradient(900px 500px at 15% -10%, rgba(37,99,235,.35), transparent 60%), radial-gradient(700px 400px at 100% 110%, rgba(217,119,6,.14), transparent 60%),
+        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+      background-size: auto, auto, 32px 32px, 32px 32px; }
+    .login-card { @apply max-w-[400px] w-full p-7 md:p-8; background: var(--c-surface); border-radius: 18px; box-shadow: var(--shadow-3); }
+    .login-card .logo { @apply w-12 h-12 rounded-[14px] mx-auto mb-4 flex items-center justify-center text-white font-extrabold text-lg; background: var(--c-primary); }
+    .login-card h1 { @apply text-center text-[20px] font-bold m-0 mb-1; color: var(--c-text); }
+    .login-card .sub { @apply text-center text-[13.5px] mb-6; color: var(--c-text-3); }
+    .pw-wrap { @apply relative; }
+    .pw-wrap input { @apply pr-12; }
+    .pw-toggle { @apply absolute right-1 top-1/2 -translate-y-1/2 w-10 h-10 rounded-lg flex items-center justify-center; color: var(--c-text-3); }
+    .pw-toggle:hover { color: var(--c-text); background: var(--c-surface-2); }
+    .pw-toggle svg { @apply w-5 h-5; }
+    .checkline { @apply flex items-center gap-2.5 text-[14px] my-1 mb-5 font-medium min-h-[44px] cursor-pointer; color: var(--c-text-2); }
+    .checkline input { @apply min-h-0; }
+    .login-reset { @apply inline-block text-[13px] underline underline-offset-2 py-2; color: var(--c-text-3); }
+    .login-reset:hover { color: var(--c-text); }
 
-    .tabstrip { @apply flex gap-1.5 overflow-x-auto mb-3.5 pb-0.5; }
-    .tabstrip button { @apply flex-none px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white text-[13px] font-semibold text-slate-500 min-h-[40px] hover:border-brand-300 transition-colors; }
-    .tabstrip button.active { @apply bg-brand-600 border-brand-600 text-white hover:border-brand-600; }
+    /* Hộp thông tin/cảnh báo — có biểu tượng, không dùng emoji */
+    .banner { @apply relative text-[13.5px] pl-10 pr-3.5 py-2.5 mt-3.5 leading-relaxed; color: var(--c-warning); background: var(--c-warning-soft); border: 1px solid var(--c-warning-border); border-radius: 10px; }
+    .banner::before { content: ''; @apply absolute left-3 top-[11px] w-[18px] h-[18px];
+      background: currentColor;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 8v5'/%3E%3Cpath d='M12 16.5h.01'/%3E%3C/svg%3E") center/contain no-repeat;
+              mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 8v5'/%3E%3Cpath d='M12 16.5h.01'/%3E%3C/svg%3E") center/contain no-repeat; }
+
+    /* Dải tab (Quản trị) */
+    .tabstrip { @apply flex gap-1.5 overflow-x-auto mb-3.5 pb-1; scrollbar-width: thin; }
+    .tabstrip button { @apply flex-none px-4 min-h-[44px] rounded-[10px] text-[14px] font-semibold; background: var(--c-surface); color: var(--c-text-2); border: 1px solid var(--c-border-strong); transition: background-color var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast); }
+    .tabstrip button:hover { border-color: var(--c-primary); color: var(--c-primary-hover); }
+    .tabstrip button.active { background: var(--c-text); border-color: var(--c-text); color: #fff; }
   }
 </style>
 </head>
 
 <body>
-<div id="globalLoadingBar"></div>
+<a class="skip-link" href="#mainContent">Bỏ qua, tới nội dung chính</a>
+<div id="globalLoadingBar" aria-hidden="true"></div>
 <div id="app"></div>
 <div id="modalRoot"></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 /* ============================================================
@@ -348,7 +478,7 @@ function saveDB(){
     // lech, du lieu that van nam tren Google Sheet.
     try { localStorage.removeItem(CONDOR_DB_KEY); } catch(e){}
   } else {
-    try { showToast('⚠️ Bộ nhớ trình duyệt đã đầy — không lưu được dữ liệu cục bộ. Hãy Xuất Backup ngay.', true); } catch(e){}
+    try { showToast('Bộ nhớ trình duyệt đã đầy — không lưu được dữ liệu cục bộ. Hãy Xuất Backup ngay.', true); } catch(e){}
   }
 }
 
@@ -672,7 +802,7 @@ window.addEventListener('online', async ()=>{
   if (r.synced>0 || r.rejected>0){
     if (currentSession) await syncEmployeesAndTeamsFromAPI(currentSession);
     let msg = r.synced>0 ? `Đã tự động đồng bộ ${r.synced} thay đổi đang chờ lúc mất mạng.` : '';
-    if (r.rejected>0) msg += (msg?' ':'') + `⚠️ ${r.rejected} thay đổi bị từ chối (VD hết hạn sửa, trùng dữ liệu) — vui lòng kiểm tra lại.`;
+    if (r.rejected>0) msg += (msg?' ':'') + `${r.rejected} thay đổi bị từ chối (VD hết hạn sửa, trùng dữ liệu) — vui lòng kiểm tra lại.`;
     showToast(msg, r.rejected>0);
     render();
   }
@@ -925,14 +1055,41 @@ let importPreview = null; // {type, rows}
 function setRoute(r){ route=r; render(); }
 
 /* ---------------- Toast / Modal ---------------- */
+let toastTimer = null;
 function showToast(msg, isErr){
   const t=document.getElementById('toast');
   t.textContent=msg; t.className='toast show'+(isErr?' err':'');
-  setTimeout(()=>t.classList.remove('show'), 2400);
+  // 4 giay (loi: 6 giay) de kip doc; huy hen gio cua lan hien truoc de thong bao moi khong bi tat som.
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>t.classList.remove('show'), isErr ? 6000 : 4000);
 }
-function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
-function openModal(html){ document.getElementById('modalRoot').innerHTML =
-  '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'+html+'</div></div>'; }
+const ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>';
+let modalReturnFocus = null;
+function closeModal(){
+  const root = document.getElementById('modalRoot');
+  if (!root.innerHTML) return;
+  root.innerHTML='';
+  // Tra focus ve nut da mo hop thoai (neu con tren trang) — nguoi dung ban phim khong bi "lac" ve dau trang.
+  if (modalReturnFocus && document.contains(modalReturnFocus)){ try { modalReturnFocus.focus(); } catch(e){} }
+  modalReturnFocus = null;
+}
+function openModal(html){
+  const root = document.getElementById('modalRoot');
+  if (!root.innerHTML) modalReturnFocus = document.activeElement;
+  root.innerHTML =
+    '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal" role="dialog" aria-modal="true" tabindex="-1">'
+    + '<button type="button" class="modal-close" data-action="closeModal" aria-label="Đóng">'+ICON_CLOSE+'</button>'
+    + html + '</div></div>';
+  const dlg = root.querySelector('.modal');
+  const h = dlg.querySelector('h3');
+  if (h){ h.id = 'modalTitle'; dlg.setAttribute('aria-labelledby', 'modalTitle'); }
+  // Dua focus vao o nhap dau tien (neu co), khong thi vao chinh hop thoai — de phim Tab/Esc hoat dong ngay.
+  const first = dlg.querySelector('input:not([type=hidden]), textarea, select');
+  try { (first || dlg).focus({ preventScroll:true }); } catch(e){}
+}
+document.addEventListener('keydown', (e)=>{
+  if (e.key==='Escape' && document.getElementById('modalRoot').innerHTML) closeModal();
+});
 
 /* ---------------- Shell ---------------- */
 /* Icon set — inline SVG, no external icon CDN (giữ app hoạt động offline hoàn toàn). Thuần trình bày, không ảnh hưởng logic. */
@@ -945,6 +1102,13 @@ function navIcon(key){
     teamdash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>',
     admin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"></path></svg>',
     logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg>',
+    teamsummary: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="M7 15v2"></path><path d="M12 10v7"></path><path d="M17 6v11"></path></svg>',
+    stdtime: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2h4"></path><path d="M12 14l3-3"></path><circle cx="12" cy="14" r="8"></circle></svg>',
+    more: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"></circle><circle cx="12" cy="12" r="1.5"></circle><circle cx="19" cy="12" r="1.5"></circle></svg>',
+    refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 4v5h-5"></path></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg>',
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
   };
   return icons[key] || '';
 }
@@ -991,15 +1155,22 @@ function tabsForRole(role){
 function renderShell(bodyHtml){
   const u = currentUser();
   const tabs = tabsForRole(u.role);
-  const sidenav = tabs.map(t=>`<button data-route="${t.k}" class="sidenav-item ${route===t.k?'active':''}"><span class="sidenav-icon">${navIcon(t.k)}</span>${t.label}</button>`).join('');
-  const bottomnav = tabs.map(t=>`<button data-route="${t.k}" class="${route===t.k?'active':''}"><span class="ic">${navIcon(t.k)}</span>${t.label}</button>`).join('');
+  const sidenav = tabs.map(t=>`<button data-route="${t.k}" class="sidenav-item ${route===t.k?'active':''}" ${route===t.k?'aria-current="page"':''}><span class="sidenav-icon" aria-hidden="true">${navIcon(t.k)}</span>${t.label}</button>`).join('');
+  // Thanh dieu huong duoi (dien thoai) toi da 5 muc — nhieu hon thi hien 4 muc dau + nut "Them" mo danh sach con lai
+  // (To truong co 6 muc, Admin 7 muc: xep het 1 hang thi chu bi cat va vung bam qua nho).
+  const BOTTOM_MAX = 5;
+  const primaryTabs = tabs.length > BOTTOM_MAX ? tabs.slice(0, BOTTOM_MAX-1) : tabs;
+  const overflowTabs = tabs.length > BOTTOM_MAX ? tabs.slice(BOTTOM_MAX-1) : [];
+  const inOverflow = overflowTabs.some(t=>t.k===route);
+  const bottomnav = primaryTabs.map(t=>`<button data-route="${t.k}" class="${route===t.k?'active':''}" ${route===t.k?'aria-current="page"':''}><span class="ic" aria-hidden="true">${navIcon(t.k)}</span><span>${t.label}</span></button>`).join('')
+    + (overflowTabs.length ? `<button data-action="openMoreNav" class="${inOverflow?'active':''}" aria-haspopup="dialog"><span class="ic" aria-hidden="true">${navIcon('more')}</span><span>Thêm</span></button>` : '');
   const pageTitle = (tabs.find(t=>t.k===route) || {label:'Condor Productivity'}).label;
   const pendingCount = getSyncQueue().length;
-  const reloadLabel = pendingCount>0 ? `⟳ Làm mới dữ liệu (${pendingCount} đang chờ gửi)` : '⟳ Làm mới dữ liệu';
+  const reloadLabel = pendingCount>0 ? `Làm mới dữ liệu (${pendingCount} đang chờ gửi)` : 'Làm mới dữ liệu';
   const reloadTitle = pendingCount>0 ? `Có ${pendingCount} thay đổi chưa gửi lên được lúc mất mạng — bấm để thử gửi lại ngay` : 'Tải lại trang và đồng bộ dữ liệu mới nhất';
   return `
   <div class="app-shell">
-    <aside class="sidebar">
+    <aside class="sidebar" aria-label="Điều hướng chính">
       <div class="sidebar-brand">
         <div class="logo">C</div>
         <div class="brand-titles">
@@ -1010,7 +1181,7 @@ function renderShell(bodyHtml){
       <nav class="sidebar-nav">${sidenav}</nav>
       <div class="sidebar-profile">
         <div class="profile-info"><b>${esc(u.ten)}</b><span>${esc(u.maNV)} · ${roleLabel(u.role)}</span></div>
-        <button class="profile-logout" data-action="logout" title="Đăng xuất">${navIcon('logout')}</button>
+        <button class="profile-logout" data-action="logout" title="Đăng xuất" aria-label="Đăng xuất">${navIcon('logout')}</button>
       </div>
     </aside>
     <div class="content-area">
@@ -1021,16 +1192,16 @@ function renderShell(bodyHtml){
           <h1>Condor Productivity</h1>
         </div>
         <div class="userbox"><b>${esc(u.ten)}</b>${esc(u.maNV)} · ${roleLabel(u.role)}</div>
-        <button class="logoutBtn" data-action="logout">Đăng xuất</button>
+        <button class="logoutBtn" data-action="logout" aria-label="Đăng xuất" title="Đăng xuất">${navIcon('logout')}</button>
       </div>
       <header class="content-header">
         <h1 class="page-title">${esc(pageTitle)}</h1>
-        <button class="offline-pill${pendingCount>0?' has-pending':''}" data-action="hardReload" title="${esc(reloadTitle)}">${esc(reloadLabel)}</button>
+        <button class="offline-pill${pendingCount>0?' has-pending':''}" data-action="hardReload" title="${esc(reloadTitle)}">${navIcon('refresh')}<span>${esc(reloadLabel)}</span></button>
       </header>
-      <main>${recordLoadInFlight ? '<div class="banner" style="margin-bottom:12px;">⏳ Đang tải dữ liệu Work Record của khoảng thời gian đang xem...</div>' : ''}${bodyHtml}</main>
+      <main id="mainContent" tabindex="-1">${recordLoadInFlight ? '<div class="banner" style="margin:0 0 12px;" role="status">Đang tải dữ liệu Work Record của khoảng thời gian đang xem...</div>' : ''}${bodyHtml}</main>
     </div>
   </div>
-  <div class="bottomtabs">${bottomnav}</div>
+  <nav class="bottomtabs" aria-label="Điều hướng chính">${bottomnav}</nav>
   `;
 }
 function roleLabel(r){ return r==='Admin'?'Admin':r==='Leader'?'Tổ trưởng':'Nhân viên'; }
@@ -1043,20 +1214,21 @@ function viewLogin(){
       <div class="logo">CD</div>
       <h1>Condor Productivity</h1>
       <div class="sub">Đăng nhập bằng Mã nhân viên</div>
-      <div id="loginErr"></div>
+      <div id="loginErr" role="alert"></div>
       <div class="field">
-        <label>Mã nhân viên <span class="req">*</span></label>
-        <input type="text" id="loginMaNV" autocomplete="username">
+        <label for="loginMaNV">Mã nhân viên <span class="req">*</span></label>
+        <input type="text" id="loginMaNV" autocomplete="username" autocapitalize="none" spellcheck="false">
       </div>
       <div class="field">
-        <label>Mật khẩu <span class="req">*</span></label>
-        <input type="password" id="loginPw" autocomplete="current-password">
+        <label for="loginPw">Mật khẩu <span class="req">*</span></label>
+        <div class="pw-wrap"><input type="password" id="loginPw" autocomplete="current-password">
+          <button type="button" class="pw-toggle" id="loginPwToggle" aria-label="Hiện mật khẩu" aria-pressed="false">${navIcon('eye')}</button></div>
       </div>
-      <div class="checkline"><input type="checkbox" id="loginRemember" checked> Ghi nhớ đăng nhập trên thiết bị này</div>
+      <label class="checkline"><input type="checkbox" id="loginRemember" checked> Ghi nhớ đăng nhập trên thiết bị này</label>
       <button class="btn btn-primary" id="btnLogin">Đăng nhập</button>
       ${API_URL ? '' : '<div class="banner">Chế độ cục bộ (chưa kết nối máy chủ): tài khoản mặc định <b>Admin</b> / mật khẩu <b>Admin</b>. Vào mục Quản trị để thêm Tổ, Nhân viên...</div>'}
-      ${(!window.crypto || !window.crypto.subtle) ? '<div class="banner" style="margin-top:10px;">⚠️ Trình duyệt hiện tại không hỗ trợ Web Crypto API (crypto.subtle) — không thể đăng nhập. Hãy mở file này bằng Chrome/Edge/Firefox bản mới.</div>' : ''}
-      <div style="text-align:center;margin-top:14px;"><a href="#" id="resetToDefault" style="font-size:12.5px;color:#94a3b8;text-decoration:underline;">Không đăng nhập được? Đặt lại dữ liệu về mặc định</a></div>
+      ${(!window.crypto || !window.crypto.subtle) ? '<div class="banner" style="margin-top:10px;">Trình duyệt hiện tại không hỗ trợ Web Crypto API (crypto.subtle) — không thể đăng nhập. Hãy mở file này bằng Chrome/Edge/Firefox bản mới.</div>' : ''}
+      <div style="text-align:center;margin-top:14px;"><a href="#" id="resetToDefault" class="login-reset">Không đăng nhập được? Đặt lại dữ liệu về mặc định</a></div>
     </div>
   </div>`;
 }
@@ -1103,7 +1275,7 @@ function initDashboardChart(retryCount){
   if (typeof Chart==='undefined'){
     // Co the CDN chinh (cdnjs) that bai va dang cho CDN du phong (jsdelivr) tai xong - thu lai vai lan truoc khi bao loi that su.
     if (retryCount < 5){ setTimeout(()=>initDashboardChart(retryCount+1), 600); return; }
-    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">⚠️ Không tải được thư viện biểu đồ (Chart.js) — cần kết nối Internet ở lần mở đầu tiên. Các phần khác của ứng dụng (KPI, bảng, nhập liệu...) vẫn hoạt động bình thường không cần mạng. Kiểm tra kết nối rồi tải lại trang.</div>';
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">Không tải được thư viện biểu đồ (Chart.js) — cần kết nối Internet ở lần mở đầu tiên. Các phần khác của ứng dụng (KPI, bảng, nhập liệu...) vẫn hoạt động bình thường không cần mạng. Kiểm tra kết nối rồi tải lại trang.</div>';
     return;
   }
   if (dashboardChartInstance){ dashboardChartInstance.destroy(); dashboardChartInstance = null; }
@@ -1130,7 +1302,7 @@ function initDashboardChart(retryCount){
       }
     });
   } catch(err){
-    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">⚠️ Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
   }
 }
 
@@ -1145,7 +1317,7 @@ function initAdminDashboardChart(retryCount){
   if (!canvas) return; // khong phai trang Admin Dashboard, khong lam gi
   if (typeof Chart==='undefined'){
     if (retryCount < 5){ setTimeout(()=>initAdminDashboardChart(retryCount+1), 600); return; }
-    canvas.parentElement.innerHTML = '<div class="empty" style="padding:20px;">⚠️ Không tải được thư viện biểu đồ (Chart.js).</div>';
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:20px;">Không tải được thư viện biểu đồ (Chart.js).</div>';
     return;
   }
   if (adminDashboardChartInstance){ adminDashboardChartInstance.destroy(); adminDashboardChartInstance = null; }
@@ -1163,7 +1335,7 @@ function initAdminDashboardChart(retryCount){
       }
     });
   } catch(err){
-    canvas.parentElement.innerHTML = '<div class="empty" style="padding:20px;">⚠️ Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:20px;">Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
   }
 }
 
@@ -1338,9 +1510,9 @@ function viewAdminDashboard(){
       <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
         <div style="width:150px;height:150px;position:relative;flex:none;"><canvas id="adminDashboardChart"></canvas></div>
         <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:8px;">
-          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;color:#10b981;">● Đã duyệt</span><span style="font-weight:700;">${stats.approvedCount}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;color:#f59e0b;">● Chờ duyệt</span><span style="font-weight:700;">${stats.pendingCount}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;color:#e11d48;">● Từ chối</span><span style="font-weight:700;">${stats.rejectedCount}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;"><i class="legend-dot" style="background:#10b981;"></i>Đã duyệt</span><span style="font-weight:700;">${stats.approvedCount}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;"><i class="legend-dot" style="background:#f59e0b;"></i>Chờ duyệt</span><span style="font-weight:700;">${stats.pendingCount}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:13.5px;"><span style="font-weight:600;"><i class="legend-dot" style="background:#e11d48;"></i>Từ chối</span><span style="font-weight:700;">${stats.rejectedCount}</span></div>
         </div>
       </div>` : '<div class="empty">Chưa có dữ liệu Work Record nào trong hệ thống.</div>'}
     </div>
@@ -1362,7 +1534,7 @@ function viewAdminDashboard(){
       <div class="section-title">Chất lượng Dữ liệu</div>
       ${dqIssues.length? `<div style="display:flex;flex-direction:column;gap:8px;">
         ${dqIssues.map(m=>`<div style="padding:9px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;font-size:13.5px;font-weight:600;color:#92400e;">${esc(m)}</div>`).join('')}
-      </div>` : `<div style="padding:10px 4px;color:#10b981;font-weight:700;font-size:13.5px;">✓ Không phát hiện vấn đề chất lượng dữ liệu nào</div>`}
+      </div>` : `<div class="ok-line">${navIcon('check')}Không phát hiện vấn đề chất lượng dữ liệu nào</div>`}
     </div>
 
     <div class="card">
@@ -1489,7 +1661,7 @@ function viewEntry(){
         <input type="text" id="entryNote" placeholder="Ghi chú thêm nếu cần..." value="${esc(s.note||'')}"></div>
     </div>
     ${s.errors.submit?`<div class="err" style="margin-bottom:10px;">${esc(s.errors.submit)}</div>`:''}
-    <button class="btn btn-primary" data-action="submitEntry" ${s.submitting?'disabled':''}>${s.submitting?'⏳ Đang lưu...':'Lưu dữ liệu'}</button>
+    <button class="btn btn-primary" data-action="submitEntry" ${s.submitting?'disabled':''}>${s.submitting?'<span class="spinner" aria-hidden="true"></span>Đang lưu...':'Lưu dữ liệu'}</button>
   `);
 }
 
@@ -1781,7 +1953,7 @@ function initTeamProductivityChart(retryCount){
   if (!canvas) return;
   if (typeof Chart==='undefined'){
     if (retryCount < 5){ setTimeout(()=>initTeamProductivityChart(retryCount+1), 600); return; }
-    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">⚠️ Không tải được thư viện biểu đồ (Chart.js).</div>';
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">Không tải được thư viện biểu đồ (Chart.js).</div>';
     return;
   }
   if (teamProductivityChartInstance){ teamProductivityChartInstance.destroy(); teamProductivityChartInstance = null; }
@@ -1803,7 +1975,7 @@ function initTeamProductivityChart(retryCount){
       }
     });
   } catch(err){
-    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">⚠️ Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
+    canvas.parentElement.innerHTML = '<div class="empty" style="padding:30px;">Lỗi khi vẽ biểu đồ: '+esc(err.message)+'</div>';
   }
 }
 function viewTeamDash(){
@@ -1899,7 +2071,7 @@ function viewTeamDash(){
             ${missingEmployees.map(e=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#fef2f2;border-radius:10px;">
               <span style="font-size:13.5px;font-weight:600;color:#334155;">${esc(e.ten)} <span style="color:#94a3b8;font-weight:500;">(${esc(e.maNV)})</span></span>
             </div>`).join('')}
-          </div>` : `<div style="padding:10px 4px;color:#10b981;font-weight:700;font-size:13.5px;">✓ Tất cả nhân viên đã nộp dữ liệu hôm nay</div>`}
+          </div>` : `<div class="ok-line">${navIcon('check')}Tất cả nhân viên đã nộp dữ liệu hôm nay</div>`}
       </div>
       <div class="card" style="margin-bottom:0;">
         <div class="section-title">Chờ duyệt</div>
@@ -1907,7 +2079,7 @@ function viewTeamDash(){
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
             <div style="font-size:13.5px;color:#334155;">${pendingCount} bản ghi đang chờ duyệt</div>
             <button class="btn btn-outline btn-sm" data-route="approve">Xem danh sách Duyệt</button>
-          </div>` : `<div style="padding:10px 4px;color:#10b981;font-weight:700;font-size:13.5px;">✓ Không có bản ghi chờ duyệt</div>`}
+          </div>` : `<div class="ok-line">${navIcon('check')}Không có bản ghi chờ duyệt</div>`}
       </div>
     </div>
 
@@ -2074,7 +2246,7 @@ function viewTeamSummary(){
       <span>TỔNG HỢP TỔ: ${esc(scope)}</span>
     </div>
     <div class="banner">Bảng này chỉ mang tính <b>tham khảo</b> để đỡ phải tự tính thời gian/năng suất — số lượng SẢN PHẨM ở đây <b>chưa chắc đã đúng</b>, Tổ trưởng vẫn cần đối chiếu với số liệu nhập kho trong ngày trước khi ghi vào bảng riêng của mình. Thời gian gián tiếp (kể cả Giải lao) luôn được liệt kê nhưng KHÔNG tính vào Năng suất.</div>
-    ${missingStdCount>0? `<div class="banner" style="border-color:#fcd34d;background:#fffbeb;color:#92400e;">⚠️ ${missingStdCount} dòng Mã TP <b>chưa có TG chuẩn</b> trong bảng "TG Chuẩn SP" — các dòng này KHÔNG được tính vào "Năng suất Tổ (tổng)" bên dưới (xem thẻ vàng "Chưa có TG chuẩn" trong bảng chi tiết).</div>` : ''}
+    ${missingStdCount>0? `<div class="banner" style="border-color:#fcd34d;background:#fffbeb;color:#92400e;">${missingStdCount} dòng Mã TP <b>chưa có TG chuẩn</b> trong bảng "TG Chuẩn SP" — các dòng này KHÔNG được tính vào "Năng suất Tổ (tổng)" bên dưới (xem thẻ vàng "Chưa có TG chuẩn" trong bảng chi tiết).</div>` : ''}
     <div class="toolbar">
       <div class="btnlist" style="gap:6px;">
         <button data-action="tsSetPreset" data-val="today" class="${window._tsPreset==='today'?'active':''}" style="min-height:38px;padding:8px 14px;">Hôm nay</button>
@@ -2339,7 +2511,7 @@ function parseWorkRecordImport(){
     // gio / phat hien dong trung khoa (ghi de) cho dung. Server van kiem tra trung gio lai lan nua khi ghi.
     const months = [...new Set(rawRows.map(row=>String(excelCellToDateStr(row.Ngay)||'').slice(0,7)))];
     const loaded = await ensureRecordMonthsLoaded(months);
-    if (!loaded) showToast('⚠️ Không tải được dữ liệu cũ để đối chiếu — Server vẫn tự kiểm tra trùng giờ khi ghi.', true);
+    if (!loaded) showToast('Không tải được dữ liệu cũ để đối chiếu — Server vẫn tự kiểm tra trùng giờ khi ghi.', true);
     const validated = validateWorkRecordRows(rawRows);
     showWorkRecordPreviewModal(validated);
   };
@@ -2355,7 +2527,7 @@ function showWorkRecordPreviewModal(validated){
   openModal(`
     <h3>Xem trước Import Work Record — ${validated.length} dòng</h3>
     <div class="banner">${newCount} dòng mới sẽ được thêm, ${updateCount} dòng trùng sẽ được <b>cập nhật (ghi đè)</b> — tất cả về trạng thái <b>Chờ duyệt</b>. ${err.length} dòng lỗi sẽ bị <b>bỏ qua</b>, không import.
-      ${needsTGCCount? `<br>⚠️ <b>${needsTGCCount} dòng chưa có Thời gian chuẩn</b> — vẫn import được (TGC tạm =0), hệ thống sẽ tự cập nhật lại khi Admin bổ sung định mức cho đúng Mã TP/Tổ/Công đoạn này.` : ''}</div>
+      ${needsTGCCount? `<br><b>${needsTGCCount} dòng chưa có Thời gian chuẩn</b> — vẫn import được (TGC tạm =0), hệ thống sẽ tự cập nhật lại khi Admin bổ sung định mức cho đúng Mã TP/Tổ/Công đoạn này.` : ''}</div>
     <div class="tablewrap" style="margin-top:10px;"><table><thead><tr>
       <th>Mã NV</th><th>Ngày</th><th>Tổ</th><th>Loại</th><th>SL</th><th>Giờ</th><th>Kết quả</th>
     </tr></thead><tbody>
@@ -2433,9 +2605,9 @@ async function commitWorkRecordImport(){
   }
   saveDB(); closeModal();
   let msg = `Đã import: ${createdCount} mới${updatedCount?`, ${updatedCount} cập nhật (ghi đè)`:''}.`;
-  if (needsTGCCount) msg += ` ⚠️ ${needsTGCCount} dòng chưa có Thời gian chuẩn (tạm =0) — sẽ tự cập nhật khi Admin bổ sung định mức.`;
+  if (needsTGCCount) msg += ` ${needsTGCCount} dòng chưa có Thời gian chuẩn (tạm =0) — sẽ tự cập nhật khi Admin bổ sung định mức.`;
   const skipped = apiResult ? (apiResult.blocked||0) + (apiResult.skippedOverlap||0) + (apiResult.invalid||0) : 0;
-  if (skipped) msg += ` ⚠️ Máy chủ bỏ qua ${skipped} dòng (ngoài phạm vi Tổ / trùng giờ / dữ liệu không hợp lệ).`;
+  if (skipped) msg += ` Máy chủ bỏ qua ${skipped} dòng (ngoài phạm vi Tổ / trùng giờ / dữ liệu không hợp lệ).`;
   showToast(msg, skipped>0);
   window._wrImportValidated=null; render();
 }
@@ -2863,7 +3035,7 @@ function viewAdminRecords(){
       <span>Tất cả Work Record</span>
       <div style="display:flex;gap:8px;">
         <button class="btn btn-outline btn-sm" style="width:auto;" data-action="exportAllRecords">Xuất Excel (.csv)</button>
-        <button class="btn btn-danger btn-sm" style="width:auto;" data-action="confirmClearAllRecords">🗑 Xoá sạch dữ liệu</button>
+        <button class="btn btn-danger btn-sm" style="width:auto;" data-action="confirmClearAllRecords">${navIcon('trash')}Xoá sạch dữ liệu</button>
       </div>
     </div>
     ${renderRecordTable(DB.workRecords, {withAdminActions:true, showToolbar:true, withMonthFilter:true, sortable:true, withTeamFilter:true, withEmployeeFilter:true, withProductFilter:true})}
@@ -2877,7 +3049,7 @@ function confirmClearAllRecords(){
   const count = s ? s.totalRecords : DB.workRecords.length;
   openModal(`
     <h3>Xoá sạch dữ liệu Work Record</h3>
-    <div class="banner" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">⚠️ Sẽ xoá vĩnh viễn toàn bộ <b>${count} Work Record</b> hiện có (mọi trạng thái) và Audit Log liên quan. Không thể hoàn tác. Sản phẩm/TGC, Nhân viên, Tổ... KHÔNG bị ảnh hưởng.</div>
+    <div class="banner" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">Sẽ xoá vĩnh viễn toàn bộ <b>${count} Work Record</b> hiện có (mọi trạng thái) và Audit Log liên quan. Không thể hoàn tác. Sản phẩm/TGC, Nhân viên, Tổ... KHÔNG bị ảnh hưởng.</div>
     <div class="field" style="margin-top:10px;"><label>Gõ XÁC NHẬN để xoá</label><input type="text" id="clearRecordsConfirmText" placeholder="Gõ XÁC NHẬN"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" data-action="closeModal">Huỷ</button>
@@ -3083,11 +3255,11 @@ function attachLoginEvents(){
     // (finally) du thanh cong/that bai/loi, tranh ket ket qua nut bi khoa vinh vien neu co loi bat ngo.
     btn.disabled = true;
     const originalBtnText = btn.textContent;
-    btn.textContent = 'Đang đăng nhập...';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Đang đăng nhập...';
     // Neu qua 4s van chua co phan hoi — rat co the API Apps Script vua "ngu"/vua Deploy lai va dang "danh thuc"
     // (co the mat toi 20-30s cho LAN DAU sau khi ngu) — cap nhat ro rang, tranh cam giac "treo" khong biet dang cho gi.
     const slowHintTimer = setTimeout(()=>{
-      if (errBox) errBox.innerHTML = '<div class="banner" style="margin-bottom:10px;">⏳ Đang chờ phản hồi từ máy chủ (có thể mất tới 20–30 giây nếu máy chủ vừa khởi động lại)...</div>';
+      if (errBox) errBox.innerHTML = '<div class="banner" style="margin:0 0 10px;">Đang chờ phản hồi từ máy chủ (có thể mất tới 20–30 giây nếu máy chủ vừa khởi động lại)...</div>';
     }, 4000);
     try {
       let hash;
@@ -3136,7 +3308,7 @@ function attachLoginEvents(){
         return;
       }
       login(maNV, remember, hash);
-      if (triedOnlineButFailed) showToast('⚠️ '+onlineFailReason+' Đã đăng nhập ở chế độ cục bộ (dữ liệu có thể chưa mới nhất) — thử "Làm mới dữ liệu" khi có mạng trở lại.', true);
+      if (triedOnlineButFailed) showToast(''+onlineFailReason+' Đã đăng nhập ở chế độ cục bộ (dữ liệu có thể chưa mới nhất) — thử "Làm mới dữ liệu" khi có mạng trở lại.', true);
       route = 'dashboard';
       render();
     } finally {
@@ -3147,6 +3319,16 @@ function attachLoginEvents(){
       if (btnAfter){ btnAfter.disabled = false; btnAfter.textContent = originalBtnText; }
     }
   });
+  const pwToggle = document.getElementById('loginPwToggle');
+  if (pwToggle) pwToggle.addEventListener('click', ()=>{
+    const inp = document.getElementById('loginPw');
+    const show = inp.type==='password';
+    inp.type = show ? 'text' : 'password';
+    pwToggle.setAttribute('aria-pressed', String(show));
+    pwToggle.setAttribute('aria-label', show ? 'Ẩn mật khẩu' : 'Hiện mật khẩu');
+  });
+  // Nhan Enter trong o Ma NV / Mat khau = bam Dang nhap
+  ['loginMaNV','loginPw'].forEach(id=>{ const el = document.getElementById(id); if (el) el.addEventListener('keydown', ev=>{ if (ev.key==='Enter'){ ev.preventDefault(); document.getElementById('btnLogin').click(); } }); });
   const resetLink = document.getElementById('resetToDefault');
   if (resetLink) resetLink.addEventListener('click', (ev)=>{
     ev.preventDefault();
@@ -3238,7 +3420,7 @@ function attachShellEvents(){
 
 function onAppClick(e){
   const routeBtn = e.target.closest('[data-route]');
-  if (routeBtn){ setRoute(routeBtn.dataset.route); return; }
+  if (routeBtn){ modalReturnFocus = null; closeModal(); setRoute(routeBtn.dataset.route); return; }
   const actBtn = e.target.closest('[data-action]');
   if (!actBtn) {
     const chk = e.target.closest('[data-approve-check]');
@@ -3257,6 +3439,11 @@ async function handleAction(action, val, id){
   switch(action){
     case 'logout': logout(); return;
     case 'hardReload': hardReload(); return;
+    case 'openMoreNav': {
+      const rest = tabsForRole(currentUser().role).slice(4);
+      openModal(`<h3>Chức năng khác</h3><div class="more-nav">${rest.map(t=>`<button data-route="${t.k}" class="${route===t.k?'active':''}"><span class="ic" aria-hidden="true">${navIcon(t.k)}</span>${t.label}</button>`).join('')}</div>`);
+      return;
+    }
     case 'entrySetType': entryState.workType=val; entryState.workingTeam=null; entryState.maTP=null; entryState.congDoan=null; entryState.maNVL=null; entryState.indirectType=null; entryState.productSearch=''; render(); return;
     case 'entrySetTeam': entryState.workingTeam=val; entryState.maTP=null; entryState.congDoan=null; entryState.maNVL=null; entryState.indirectType=null; entryState.productSearch=''; render(); return;
     case 'entrySetProduct': entryState.maTP=val; entryState.congDoan=null; entryState.maNVL=null; render(); return;
@@ -3681,7 +3868,7 @@ async function showAuditModal(id){
   if (apiResult && !apiResult.ok){ openModal(`<h3>Audit Log</h3><div class="err">${esc(apiResult.error||'Không tải được nhật ký.')}</div><div class="modal-actions"><button class="btn btn-outline" data-action="closeModal">Đóng</button></div>`); return; }
   const logs = (apiResult && apiResult.ok) ? apiResult.auditLogs
     : DB.auditLogs.filter(l=>l.recordId===id).sort((a,b)=>b.changedAt-a.changedAt);
-  const offlineNote = (apiResult && apiResult.ok) ? '' : '<div class="hint">⚠️ Không kết nối được Server — chỉ hiển thị log cục bộ trên máy này.</div>';
+  const offlineNote = (apiResult && apiResult.ok) ? '' : '<div class="hint">Không kết nối được Server — chỉ hiển thị log cục bộ trên máy này.</div>';
   openModal(`<h3>Audit Log</h3>
     ${offlineNote}
     ${logs.length? logs.map(l=>`
