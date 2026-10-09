@@ -383,7 +383,12 @@
 
 const CONDOR_DB_KEY = 'condor_offline_db_v1';
 const CONDOR_SESSION_KEY = 'condor_offline_session_v1';
-const BREAKS = [[600,610],[720,780],[900,910],[1020,1035]]; // 10:00-10:10,12:00-13:00,15:00-15:10,17:00-17:15
+// Lịch nghỉ — business-rules-addendum.md BR-300..BR-309 (chốt 09/10/2026). PHẢI khớp Code.gs.
+//  - Giải lao 10:00-10:10, 15:00-15:10: ghi vào TG giải lao, trừ khỏi TG thao tác (BR-301).
+//  - Nghỉ trưa 12:00-13:00, nghỉ ăn chiều 17:00-17:15: loại hẳn khỏi Tổng TG, không tính là giải lao (BR-302).
+const REST_BREAKS = [[600,610],[900,910]];
+const EXCLUDED_BREAKS = [[720,780],[1020,1035]];
+const BREAKS = [[600,610],[720,780],[900,910],[1020,1035]]; // cả 4 khoảng — kiểm tra bản ghi nằm trọn trong giờ nghỉ (BR-304)
 const OT_START = 1035; // 17:15
 
 /* ---------------- Seed data ---------------- */
@@ -520,31 +525,22 @@ function computeTimes(startMin, endMinRaw){
   let end = endMinRaw;
   let crossMidnight = false;
   if (end <= startMin){ end += 1440; crossMidnight = true; }
-  const totalTime = end - startMin;
-  let breakTime = 0;
-  if (!crossMidnight){ // BR-241: no break applied for cross-midnight records
-    for (const [bs,be] of BREAKS){
-      const overlap = Math.max(0, Math.min(end,be) - Math.max(startMin,bs));
-      breakTime += overlap;
-    }
+  // BR-303: Tổng TG = (Kết thúc − Bắt đầu) − nghỉ trưa − nghỉ ăn chiều; TG giải lao = 2 lần 10 phút; TG thao tác = Tổng TG − giải lao.
+  const spanTime = end - startMin; // chưa trừ gì — chỉ dùng cho kiểm tra "ca quá dài"
+  let breakTime = 0, excluded = 0;
+  if (!crossMidnight){ // BR-241: ca qua nửa đêm không trừ khoảng nghỉ nào
+    for (const [bs,be] of REST_BREAKS) breakTime += Math.max(0, Math.min(end,be) - Math.max(startMin,bs));
+    for (const [bs,be] of EXCLUDED_BREAKS) excluded += Math.max(0, Math.min(end,be) - Math.max(startMin,bs));
   }
+  const totalTime = spanTime - excluded;
   const actualTime = totalTime - breakTime;
   // entirely inside a break?
   let insideBreak = false;
   if (!crossMidnight){
     for (const [bs,be] of BREAKS){ if (startMin>=bs && end<=be){ insideBreak = true; break; } }
   }
-  // OT (display-only metric, does not affect productivity denominator)
-  let otMinutes = 0;
-  if (!crossMidnight && end > OT_START){
-    const otRawStart = Math.max(startMin, OT_START);
-    let otRaw = end - otRawStart;
-    for (const [bs,be] of BREAKS){
-      otRaw -= Math.max(0, Math.min(end,be) - Math.max(otRawStart,bs));
-    }
-    otMinutes = Math.floor(Math.max(0,otRaw)/30)*30; // UI/BR-244 round down to 30-min block
-  }
-  return { totalTime, breakTime, actualTime, crossMidnight, insideBreak, otMinutes };
+  // Giờ tăng ca KHÔNG được hệ thống tách hay làm tròn (BR-306, BR-307 thay BR-244) — không tính otMinutes nữa.
+  return { spanTime, totalTime, breakTime, actualTime, crossMidnight, insideBreak };
 }
 
 function resolveStandardTime(maTP, workingTeam, congDoan, maNVL){
@@ -623,7 +619,7 @@ function getProductStdTime(maTP, workingTeam){
 function computeGiaiLaoMinutes(startMin, endMinRaw){
   let end = endMinRaw;
   if (end <= startMin) return 0; // giong computeTimes(): qua nua dem thi KHONG tinh Break (BR-241), Giai lao cung vay
-  const GIAI_LAO_WINDOWS = [BREAKS[0], BREAKS[2]]; // 10:00-10:10 va 15:00-15:10 — bo qua BREAKS[1] (trua) va BREAKS[3] (17h)
+  const GIAI_LAO_WINDOWS = REST_BREAKS; // 10:00-10:10 va 15:00-15:10 — bo qua BREAKS[1] (trua) va BREAKS[3] (17h)
   let mins = 0;
   for (const [bs,be] of GIAI_LAO_WINDOWS){
     mins += Math.max(0, Math.min(end,be) - Math.max(startMin,bs));
@@ -2466,7 +2462,7 @@ function validateWorkRecordRows(rows){
       times = computeTimes(startMin, endMin);
       if (times.insideBreak) errors.push('Nằm hoàn toàn trong giờ Break');
       if (times.actualTime<=0) errors.push('Actual Time = 0');
-      if (times.totalTime > 960) errors.push('Tổng thời gian quá dài (>16h) — có thể sai Giờ bắt đầu/Kết thúc');
+      if (times.spanTime > 960) errors.push('Tổng thời gian quá dài (>16h) — có thể sai Giờ bắt đầu/Kết thúc');
       if (workType==='Direct' && errors.length===0){
         const resolved = resolveStandardTime(maTP, workingTeam, congDoan, maNVL);
         if (resolved===null){ thoiGianChuan = 0; needsStandardTime = true; } // BR mới: khong chan import, luu tam =0, gan co canh bao
@@ -3555,7 +3551,7 @@ async function submitEntry(){
   const times = computeTimes(startMin, endMin);
   if (times.insideBreak){ s.errors.time = 'Khoảng thời gian nằm hoàn toàn trong giờ Break — không được lưu.'; render(); return; }
   if (times.actualTime<=0){ s.errors.time = 'Actual Time bằng 0 — không được lưu.'; render(); return; }
-  if (times.totalTime > 960){ s.errors.time = `Tổng thời gian ${Math.round(times.totalTime/60*10)/10} giờ — quá dài cho 1 ca, có thể anh chọn nhầm Giờ bắt đầu/Kết thúc. Kiểm tra lại.`; render(); return; }
+  if (times.spanTime > 960){ s.errors.time = `Tổng thời gian ${Math.round(times.spanTime/60*10)/10} giờ — quá dài cho 1 ca, có thể anh chọn nhầm Giờ bắt đầu/Kết thúc. Kiểm tra lại.`; render(); return; }
   // Kiem tra trung gio theo CHU BAN GHI (khi Leader/Admin sua ho thi khong phai nguoi dang dang nhap).
   const ownerMaNV = isEdit ? existing.maNV : u.maNV;
   const overlap = overlapsExisting(ownerMaNV, s.date, startMin, endMin, s.editingId);
@@ -3586,7 +3582,7 @@ async function submitEntry(){
     maNVL: s.workType==='Direct'?(s.maNVL||null):null, tenNVL: s.workType==='Direct'?tenNVL:'',
     indirectType: s.workType==='Indirect'?s.indirectType:null,
     thoiGianChuan, quantity: s.workType==='Direct'?s.quantity:0,
-    start:startMin, end:endMin, totalTime:times.totalTime, breakTime:times.breakTime, actualTime:times.actualTime, otMinutes:times.otMinutes,
+    start:startMin, end:endMin, totalTime:times.totalTime, breakTime:times.breakTime, actualTime:times.actualTime,
     note: s.note||'', needsStandardTime:false,
   });
   // Trong luc cho Server: khoa nut Lưu + bao "dang xep hang" neu Server ban (busy). Neu that bai, GIU NGUYEN
